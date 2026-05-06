@@ -11,6 +11,15 @@ Important reading of the paper:
     vector **per session** here, with session boundaries identical to those
     used by ``preprocess_raw.py``.
 
+Implementation note (streaming):
+    Pcaps in the dataset can hold tens of millions of packets in a single
+    session (e.g. a 2.4 GB FILE-TRANSFER capture is essentially one TCP flow).
+    Buffering all scapy ``Packet`` objects per session blows up memory and
+    spends most of its CPU time copying payload bytes. We instead use a
+    ``SessionAcc`` accumulator that updates running counters and Welford's
+    online variance per packet, so memory is O(num_sessions) and we never
+    materialise per-packet payload bytes.
+
 For each session we compute:
   TCP flag means (SYN, URG, FIN, ACK, PSH, RST)        ->  6
   Protocol counts (DNS, TCP, UDP, ICMP)                ->  4
@@ -24,8 +33,8 @@ For each session we compute:
                                                        ----
                                                          26
 
-Threshold: keep sessions with >= MIN_PACKETS=10 packets (Algorithm 2 line 13).
-Algorithm 1 already drops sessions with < 3 packets; sessions with 3-9 packets
+Threshold: keep sessions with > MIN_PACKETS=10 packets (Algorithm 2 line 13).
+Algorithm 1 already drops sessions with < 3 packets; sessions with 3-10 packets
 exist in the image manifest but not the stats manifest. The Dataset's
 ``load_joined_manifest`` joins on ``session_id`` so those few sessions are
 dropped from the joined training set.
@@ -36,14 +45,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import multiprocessing as mp
-import statistics
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scapy.all import PcapReader  # type: ignore[import-untyped]
-from scapy.layers.dns import DNS  # type: ignore[import-untyped]
 from scapy.layers.inet import ICMP, IP, TCP, UDP  # type: ignore[import-untyped]
 from tqdm import tqdm
 
@@ -85,109 +93,181 @@ FEATURE_ORDER: tuple[str, ...] = (
 )
 
 
-def _safe_stat(values: list[float], fn) -> float:
-    return float(fn(values)) if values else 0.0
+class SessionAcc:
+    """Streaming accumulator for one session.
 
+    Memory is O(1) regardless of packet count; Welford's online algorithm is
+    used for running variance so we never store per-packet values.
+    """
 
-def _stdev(values: list[float]) -> float:
-    return float(statistics.pstdev(values)) if len(values) >= 2 else 0.0
+    __slots__ = (
+        "n", "n_tcp", "n_udp", "n_icmp", "n_dns", "n_small",
+        "syn", "urg", "fin", "ack", "psh", "rst",
+        "first_ts", "last_ts",
+        "d_n", "d_mean", "d_M2", "d_min", "d_max",
+        "pl_n", "pl_mean", "pl_M2", "pl_min", "pl_max",
+        "py_n", "py_mean", "py_M2", "py_min", "py_max",
+    )
 
+    def __init__(self) -> None:
+        self.n = 0
+        self.n_tcp = self.n_udp = self.n_icmp = self.n_dns = self.n_small = 0
+        self.syn = self.urg = self.fin = self.ack = self.psh = self.rst = 0
+        self.first_ts: float | None = None
+        self.last_ts: float | None = None
+        # delta-times (n-1 inter-packet intervals)
+        self.d_n = 0
+        self.d_mean = 0.0
+        self.d_M2 = 0.0
+        self.d_min = math.inf
+        self.d_max = -math.inf
+        # packet lengths
+        self.pl_n = 0
+        self.pl_mean = 0.0
+        self.pl_M2 = 0.0
+        self.pl_min = math.inf
+        self.pl_max = -math.inf
+        # payload sizes
+        self.py_n = 0
+        self.py_mean = 0.0
+        self.py_M2 = 0.0
+        self.py_min = math.inf
+        self.py_max = -math.inf
 
-def _payload_size(pkt) -> int:
-    if TCP in pkt:
-        return len(bytes(pkt[TCP].payload))
-    if UDP in pkt:
-        return len(bytes(pkt[UDP].payload))
-    return 0
-
-
-def compute_features(packets: list) -> dict | None:
-    """Compute 26-d features over the list of scapy packets belonging to ONE session."""
-    n = len(packets)
-    if n <= MIN_PACKETS:
-        return None
-
-    flags = {k: 0 for k in ("S", "U", "F", "A", "P", "R")}
-    n_dns = n_tcp = n_udp = n_icmp = 0
-    n_small = 0
-    pkt_lens: list[int] = []
-    payload_lens: list[int] = []
-    timestamps: list[float] = []
-
-    for pkt in packets:
-        pkt_lens.append(len(pkt))
-        timestamps.append(float(pkt.time))
+    @staticmethod
+    def _payload_size_fast(pkt) -> int:
+        """O(1) payload size via header arithmetic - avoids materialising bytes."""
         if TCP in pkt:
-            n_tcp += 1
+            ip = pkt[IP] if IP in pkt else None
+            if ip is None:
+                return 0
+            tcp = pkt[TCP]
+            ip_payload = int(ip.len) - (int(ip.ihl) * 4)
+            return max(0, ip_payload - (int(tcp.dataofs) * 4))
+        if UDP in pkt:
+            return max(0, int(pkt[UDP].len) - 8)
+        return 0
+
+    def update(self, pkt) -> None:
+        self.n += 1
+
+        # timestamp + delta
+        ts = float(pkt.time)
+        if self.first_ts is None:
+            self.first_ts = ts
+        else:
+            d = ts - (self.last_ts or ts)
+            self.d_n += 1
+            delta = d - self.d_mean
+            self.d_mean += delta / self.d_n
+            self.d_M2 += delta * (d - self.d_mean)
+            if d < self.d_min:
+                self.d_min = d
+            if d > self.d_max:
+                self.d_max = d
+        self.last_ts = ts
+
+        # packet length
+        plen = len(pkt)
+        self.pl_n += 1
+        delta = plen - self.pl_mean
+        self.pl_mean += delta / self.pl_n
+        self.pl_M2 += delta * (plen - self.pl_mean)
+        if plen < self.pl_min:
+            self.pl_min = plen
+        if plen > self.pl_max:
+            self.pl_max = plen
+
+        # protocol counts + flags
+        if TCP in pkt:
+            self.n_tcp += 1
             f = int(pkt[TCP].flags)
             if f & 0x02:
-                flags["S"] += 1
+                self.syn += 1
             if f & 0x20:
-                flags["U"] += 1
+                self.urg += 1
             if f & 0x01:
-                flags["F"] += 1
+                self.fin += 1
             if f & 0x10:
-                flags["A"] += 1
+                self.ack += 1
             if f & 0x08:
-                flags["P"] += 1
+                self.psh += 1
             if f & 0x04:
-                flags["R"] += 1
+                self.rst += 1
         if UDP in pkt:
-            n_udp += 1
+            self.n_udp += 1
+            # DNS heuristic: UDP and either port == 53 (avoids slow DNS-layer parse)
+            try:
+                udp = pkt[UDP]
+                if int(udp.sport) == 53 or int(udp.dport) == 53:
+                    self.n_dns += 1
+            except Exception:  # pragma: no cover
+                pass
         if ICMP in pkt:
-            n_icmp += 1
-        if DNS in pkt:
-            n_dns += 1
-        pl = _payload_size(pkt)
-        payload_lens.append(pl)
-        if pl < SMALL_PAYLOAD_THRESHOLD:
-            n_small += 1
+            self.n_icmp += 1
 
-    deltas = [timestamps[i] - timestamps[i - 1] for i in range(1, n)] if n > 1 else []
-    duration = (timestamps[-1] - timestamps[0]) if n > 1 else 0.0
+        # payload size (O(1) header math)
+        py = self._payload_size_fast(pkt)
+        self.py_n += 1
+        delta = py - self.py_mean
+        self.py_mean += delta / self.py_n
+        self.py_M2 += delta * (py - self.py_mean)
+        if py < self.py_min:
+            self.py_min = py
+        if py > self.py_max:
+            self.py_max = py
+        if py < SMALL_PAYLOAD_THRESHOLD:
+            self.n_small += 1
 
-    feats = {
-        "Avg_syn_flag": flags["S"] / n,
-        "Avg_urg_flag": flags["U"] / n,
-        "Avg_fin_flag": flags["F"] / n,
-        "Avg_ack_flag": flags["A"] / n,
-        "Avg_psh_flag": flags["P"] / n,
-        "Avg_rst_flag": flags["R"] / n,
-        "Avg_DNS_pkt": n_dns / n,
-        "Avg_TCP_pkt": n_tcp / n,
-        "Avg_UDP_pkt": n_udp / n,
-        "Avg_ICMP_pkt": n_icmp / n,
-        "Duration_window_flow": duration,
-        "Avg_deltas_time": _safe_stat(deltas, statistics.mean),
-        "Min_deltas_time": _safe_stat(deltas, min),
-        "Max_deltas_time": _safe_stat(deltas, max),
-        "StDev_deltas_time": _stdev(deltas),
-        "Avg_Pkts_length": _safe_stat(pkt_lens, statistics.mean),
-        "Min_Pkts_length": _safe_stat(pkt_lens, min),
-        "Max_Pkts_length": _safe_stat(pkt_lens, max),
-        "StDev_Pkts_length": _stdev([float(x) for x in pkt_lens]),
-        "Avg_small_loadings_pkt": n_small / n,
-        "Avg_payload": _safe_stat(payload_lens, statistics.mean),
-        "Min_payload": _safe_stat(payload_lens, min),
-        "Max_payload": _safe_stat(payload_lens, max),
-        "StDev_payload": _stdev([float(x) for x in payload_lens]),
-        "Avg_DNS_over_TCP": (n_dns / n_tcp) if n_tcp else 0.0,
-        "num_packets": float(n),
-    }
-    assert tuple(feats) == FEATURE_ORDER, "feature ordering drifted"
-    return feats
+    def to_dict(self) -> dict | None:
+        if self.n <= MIN_PACKETS:
+            return None
+        n = self.n
+        pl_stdev = math.sqrt(self.pl_M2 / self.pl_n) if self.pl_n > 1 else 0.0
+        py_stdev = math.sqrt(self.py_M2 / self.py_n) if self.py_n > 1 else 0.0
+        d_stdev = math.sqrt(self.d_M2 / self.d_n) if self.d_n > 1 else 0.0
+        duration = (self.last_ts - self.first_ts) if self.first_ts is not None else 0.0
+        d_min = float(self.d_min) if self.d_n > 0 else 0.0
+        d_max = float(self.d_max) if self.d_n > 0 else 0.0
+        d_mean = float(self.d_mean) if self.d_n > 0 else 0.0
+        feats = {
+            "Avg_syn_flag": self.syn / n,
+            "Avg_urg_flag": self.urg / n,
+            "Avg_fin_flag": self.fin / n,
+            "Avg_ack_flag": self.ack / n,
+            "Avg_psh_flag": self.psh / n,
+            "Avg_rst_flag": self.rst / n,
+            "Avg_DNS_pkt": self.n_dns / n,
+            "Avg_TCP_pkt": self.n_tcp / n,
+            "Avg_UDP_pkt": self.n_udp / n,
+            "Avg_ICMP_pkt": self.n_icmp / n,
+            "Duration_window_flow": duration,
+            "Avg_deltas_time": d_mean,
+            "Min_deltas_time": d_min,
+            "Max_deltas_time": d_max,
+            "StDev_deltas_time": d_stdev,
+            "Avg_Pkts_length": float(self.pl_mean),
+            "Min_Pkts_length": float(self.pl_min) if self.pl_n > 0 else 0.0,
+            "Max_Pkts_length": float(self.pl_max) if self.pl_n > 0 else 0.0,
+            "StDev_Pkts_length": pl_stdev,
+            "Avg_small_loadings_pkt": self.n_small / n,
+            "Avg_payload": float(self.py_mean),
+            "Min_payload": float(self.py_min) if self.py_n > 0 else 0.0,
+            "Max_payload": float(self.py_max) if self.py_n > 0 else 0.0,
+            "StDev_payload": py_stdev,
+            "Avg_DNS_over_TCP": (self.n_dns / self.n_tcp) if self.n_tcp else 0.0,
+            "num_packets": float(n),
+        }
+        assert tuple(feats) == FEATURE_ORDER, "feature ordering drifted"
+        return feats
 
 
 def _process_pcap(pcap: Path) -> list[dict]:
-    """Walk one raw pcap, split into sessions, compute 26-d features per session.
-
-    Per-packet exception handling (matching preprocess_raw) so that one
-    malformed packet does not discard the whole pcap.
-    """
+    """Walk one raw pcap, split into sessions, accumulate features per session."""
     label = label_from_path(pcap)
     if label is None:
         return []
-    sessions: dict[tuple, list] = {}
+    sessions: dict[tuple, SessionAcc] = {}
     try:
         reader = PcapReader(str(pcap))
     except Exception as exc:
@@ -199,22 +279,22 @@ def _process_pcap(pcap: Path) -> list[dict]:
                 key = _session_key(pkt)
                 if key is None:
                     continue
-                sessions.setdefault(key, []).append(pkt)
-            except Exception as exc:  # pragma: no cover - rare malformed packets
+                acc = sessions.get(key)
+                if acc is None:
+                    acc = SessionAcc()
+                    sessions[key] = acc
+                acc.update(pkt)
+            except Exception as exc:  # pragma: no cover
                 LOG.debug("skip pkt %d in %s: %s", i, pcap.name, exc)
     finally:
         reader.close()
     rows: list[dict] = []
-    for key, packets in sessions.items():
-        feats = compute_features(packets)
+    for key, acc in sessions.items():
+        feats = acc.to_dict()
         if feats is None:
             continue
         sid = f"{pcap.stem}__{key[0]}_{key[2]}_{key[1]}_{key[3]}_{key[4]}"
-        rows.append({
-            "session_id": sid,
-            "pcap_src": str(pcap),
-            **feats,
-        })
+        rows.append({"session_id": sid, "pcap_src": str(pcap), **feats})
     return rows
 
 
@@ -268,6 +348,16 @@ def preprocess(raw_root: Path, out_root: Path, workers: int = 1) -> Path:
     df.to_parquet(manifest, index=False)
     LOG.info("wrote %d session-level feature vectors -> %s", len(df), manifest)
     return manifest
+
+
+def compute_features(packets: list) -> dict | None:
+    """Backwards-compatible entry point used by tests: feed a list of scapy
+    packets through a fresh accumulator and return the 26-d dict.
+    """
+    acc = SessionAcc()
+    for pkt in packets:
+        acc.update(pkt)
+    return acc.to_dict()
 
 
 def main(argv: list[str] | None = None) -> int:
