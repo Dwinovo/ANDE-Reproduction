@@ -1,0 +1,55 @@
+# Paper assets (kept local only)
+paper/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# uv / venv
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (large; downloaded separately) — keep folder structure via .gitkeep
+data/raw/**
+!data/raw/.gitkeep
+data/sessions/**
+!data/sessions/.gitkeep
+data/images/**
+!data/images/.gitkeep
+data/stats/**
+!data/stats/.gitkeep
+*.pcap
+*.pcapng
+
+# Training artifacts
+runs/
+checkpoints/
+logs/
+outputs/
+*.pt
+*.pth
+*.onnx
+*.ckpt
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_meta
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/

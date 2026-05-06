@@ -1,0 +1,27 @@
+# Ablation: ANDE without the SE block (paper Table V row "ANDE (without SE block)")
+run_name: ande_8100_14cls_no_se
+seed: 42
+
+data:
+  size: 8100
+  task: behavior14
+  split_ratio: 0.8
+  batch_size: 64
+  num_workers: 4
+  manifest_raw: data/manifest_raw.parquet
+  manifest_stats: data/manifest_stats.parquet
+
+model:
+  name: ande
+  use_se: false
+  se_reduction: 16
+
+train:
+  epochs: 50
+  optimizer: adam
+  lr: 0.001
+  weight_decay: 0.0
+  scheduler: step
+  step_size: 10
+  gamma: 0.5
+  early_stop_patience: 10
