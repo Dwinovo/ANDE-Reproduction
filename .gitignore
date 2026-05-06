@@ -44,6 +44,7 @@ outputs/
 *.pth
 *.onnx
 *.ckpt
+*.log
 
 # Jupyter
 .ipynb_checkpoints/

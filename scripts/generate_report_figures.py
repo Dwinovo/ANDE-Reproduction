@@ -184,6 +184,65 @@ def fig_per_class_metrics() -> Path:
     return out
 
 
+def fig_matrix_overview() -> Path:
+    """Bar chart: accuracy by (method, size) for both tasks."""
+    csv = REPO_ROOT / "docs" / "results" / "results_long.csv"
+    if not csv.exists():
+        raise FileNotFoundError(csv)
+    df = pd.read_csv(csv)
+    df = df.dropna(subset=["size", "task", "method"])
+    df["size"] = df["size"].astype(int)
+
+    method_order = ["dt", "rf", "xgb", "cnn1d", "resnet18", "ande_no_se", "ande"]
+    method_color = {
+        "dt": "#9467bd", "rf": "#8c564b", "xgb": "#e377c2",
+        "cnn1d": "#1f77b4", "resnet18": "#17becf",
+        "ande_no_se": "#ff7f0e", "ande": "#2ca02c",
+    }
+    sizes = [784, 4096, 8100]
+
+    fig, axes = plt.subplots(2, 1, figsize=(14, 9), sharex=True)
+    for ax, task, paper_line in zip(
+        axes, ["behavior14", "binary2"], [0.9820, None], strict=True
+    ):
+        sub = df[df["task"] == task]
+        # average across seeds
+        agg = sub.groupby(["method", "size"], as_index=False)["accuracy"].mean()
+        x = np.arange(len(method_order))
+        width = 0.27
+        for i, sz in enumerate(sizes):
+            sz_acc = []
+            for m in method_order:
+                row = agg[(agg["method"] == m) & (agg["size"] == sz)]
+                sz_acc.append(row["accuracy"].iloc[0] if not row.empty else np.nan)
+            offset = (i - 1) * width
+            colors = [method_color[m] for m in method_order]
+            bars = ax.bar(x + offset, sz_acc, width, label=f"size={sz}",
+                          color=colors, alpha=0.55 + 0.225 * i,
+                          edgecolor="black", linewidth=0.4)
+            for j, v in enumerate(sz_acc):
+                if not np.isnan(v):
+                    ax.text(x[j] + offset, v + 0.001, f"{v:.3f}",
+                            ha="center", fontsize=6.5, rotation=90)
+        if paper_line is not None:
+            ax.axhline(paper_line, color="red", linewidth=1, linestyle=":",
+                       label=f"paper Acc {paper_line}")
+        ax.set_ylim(0.93, 1.005)
+        ax.set_ylabel("accuracy")
+        ax.set_title(f"task = {task}")
+        ax.grid(True, axis="y", alpha=0.3)
+        ax.set_xticks(x)
+        ax.set_xticklabels(method_order, rotation=0)
+        ax.legend(loc="lower left", ncol=4, fontsize=8)
+    fig.suptitle("42-experiment matrix: accuracy by method x size x task (RTX 5090)",
+                 y=1.005)
+    fig.tight_layout()
+    out = OUT / "matrix_overview.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
 def fig_sample_images() -> Path:
     """One 90x90 raw-byte image per 14-class label."""
     df = pd.read_parquet(MANIFEST)
@@ -229,6 +288,7 @@ def main() -> int:
         ("confusion_matrix", fig_confusion_matrix),
         ("per_class_metrics", fig_per_class_metrics),
         ("sample_images", fig_sample_images),
+        ("matrix_overview", fig_matrix_overview),
     ]:
         path = fn()
         print(f"wrote {path.relative_to(REPO_ROOT)}")

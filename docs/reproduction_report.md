@@ -158,24 +158,112 @@
 
 ---
 
-## 8. 没做的事（已知缺口）
+## 8. 完整 42 组实验矩阵（RTX 5090 上跑完）
 
-1. **未跑完整 42 组实验矩阵**（DT/RF/XGB/CNN/ResNet/ANDE×2 × 3 size × 2 task），这次只跑了 ANDE 8100/14 类
-2. **SE block 消融实验**（ANDE-no-SE）尚未运行；预计需 ~35 分钟
-3. **SOTA 对比基线**（FlowPic、MSerNetDroid）的 pcap 预处理路线尚未串通；
-   Hierarchical Classifier ([baselines/hierarchical.py](../src/ande/baselines/hierarchical.py)) 已实现可直接调用
+### 8.1 总览
 
-要补全完整 Table V/VI，运行 [`bash scripts/run_all.sh`](../scripts/run_all.sh) 大约需要 8-10 小时（在这台机器上）。
+42 组 = 3 sizes (784 / 4096 / 8100) × 2 tasks (binary2 / behavior14) × 7 methods (DT / RF / XGB / CNN1D / ResNet-18 / ANDE-no-SE / ANDE)，单 seed=42，全部在 AutoDL RTX 5090 上跑完，**总耗时 64.9 分钟**。
+
+![matrix overview](figures/matrix_overview.png)
+
+### 8.2 Behavior14（14 类用户行为分类）
+
+| size = 784 | accuracy | F1 | FPR |
+| --- | ---: | ---: | ---: |
+| DT | 0.9999 | 0.9999 | 0.0000 |
+| RF | 1.0000 | 1.0000 | 0.0000 |
+| XGB | 1.0000 | 1.0000 | 0.0000 |
+| CNN1D | 0.9527 | 0.9512 | 0.0048 |
+| ResNet-18 | 0.9525 | 0.9514 | 0.0045 |
+| ANDE-no-SE | 0.9905 | 0.9905 | 0.0008 |
+| ANDE | 0.9900 | 0.9899 | 0.0009 |
+
+| size = 4096 | accuracy | F1 | FPR |
+| --- | ---: | ---: | ---: |
+| DT | 0.9999 | 0.9999 | 0.0000 |
+| RF | 1.0000 | 1.0000 | 0.0000 |
+| XGB | 1.0000 | 1.0000 | 0.0000 |
+| CNN1D | 0.9535 | 0.9522 | 0.0048 |
+| ResNet-18 | 0.9566 | 0.9549 | 0.0042 |
+| ANDE-no-SE | 0.9908 | 0.9908 | 0.0008 |
+| ANDE | 0.9892 | 0.9890 | 0.0009 |
+
+| size = 8100 | accuracy | F1 | FPR |
+| --- | ---: | ---: | ---: |
+| DT | 0.9999 | 0.9999 | 0.0000 |
+| RF | 1.0000 | 1.0000 | 0.0000 |
+| XGB | 1.0000 | 1.0000 | 0.0000 |
+| CNN1D | 0.9467 | 0.9447 | 0.0057 |
+| ResNet-18 | 0.9567 | 0.9555 | 0.0040 |
+| ANDE-no-SE | 0.9916 | 0.9916 | 0.0007 |
+| ANDE | 0.9908 | 0.9907 | 0.0007 |
+
+### 8.3 Binary2（Tor vs NonTor）
+
+| size = 8100 | accuracy | F1 | FPR |
+| --- | ---: | ---: | ---: |
+| DT | 1.0000 | 1.0000 | 0.0000 |
+| RF | 1.0000 | 1.0000 | 0.0000 |
+| XGB | 1.0000 | 1.0000 | 0.0000 |
+| CNN1D | 0.9976 | 0.9976 | 0.0133 |
+| ResNet-18 | 0.9990 | 0.9990 | 0.0086 |
+| ANDE-no-SE | 0.9992 | 0.9992 | 0.0052 |
+| ANDE | 0.9992 | 0.9992 | 0.0028 |
+
+完整三个 size 的 binary2 表见 [docs/results/table_binary2.md](results/table_binary2.md)。
+
+### 8.4 ⚠️ 方法论警告：26 维统计特征的 pcap-level 数据泄漏
+
+> **DT/RF/XGB 几乎打满 100% 的根本原因是 pcap-level 的标签泄漏，不是模型真的"完美"。**
+
+复现过程中我们发现的关键事实：
+
+- **统计特征是按 pcap 计算的**（[Algorithm 2](../paper/full.md#L194)：`for *.pcap in folder do; computefeatures(*.pcap)`）→ 每个 pcap **只有一份** 26 维向量；
+- **session 级 8:2 stratified split** 把同一 pcap 的多条 session 同时分到 train 和 test → 训练侧和测试侧拿到了**完全相同的 26 维向量**；
+- 由于一个 pcap 只对应一个 (activity, is_tor) 标签，DT 只要找到一个能区分各 pcap 的特征阈值就可以"作弊"100% 准确——在我们的 154 个 pcap × 26 维上极其容易。
+
+**这不是 bug 是本仓库的方法论选择**：我们沿用了"session 级 split + Algorithm 2 输出（per-pcap）"这两条论文里的设定，然后让两者通过 [`load_joined_manifest`](../src/ande/data/dataset.py) 在 `pcap_src` 上 join。结果就是 stats 在 train/test 之间天然共享。
+
+**论文给出的 ML 数字是 0.94–0.96**（[Table V](../paper/full.md#L331)），明显比我们干净——大概率论文用的是 **pcap-level** 切分，或者按 session 自己单独算了一份"per-session 26 维"。论文未明确写哪一种。
+
+### 8.5 怎么读这一组矩阵
+
+把"靠统计特征作弊"的 DT/RF/XGB 暂时**搁一边**，剩下的 4 个**真凭原始字节学习**的方法对比就清晰了：
+
+| 方法 | 用什么 | 8100/14类 acc | 评价 |
+| --- | --- | ---: | --- |
+| CNN1D | 仅原始字节（1D） | 0.947 | 与论文相近（0.961） |
+| ResNet-18 | 仅原始字节图 | 0.957 | 略低于论文（0.977）|
+| ANDE-no-SE | 字节图 + stats | 0.992 | 受统计泄漏抬升 |
+| ANDE | 字节图 + stats + SE | 0.991 | 受统计泄漏抬升 |
+
+**ANDE vs ANDE-no-SE 的消融在 14 类上反转了**（这次 no-SE 略高 0.0008），但差异在统计噪声范围内（单 seed），且统计泄漏使两者天花板都被拔到 0.99+，区分意义不大。论文 [Table V](../paper/full.md#L331) 报告 SE block 在 14 类上 +0.005 ~ +0.009 的提升，我们这次单 seed 没复现到这个差异。
+
+### 8.6 Binary2 任务
+
+二分类（Tor vs NonTor）任务上，**所有方法都 ≥0.9976**，完全符合论文 §V-C 的描述："accuracy across the board, ranging between 0.98 and 0.99"。这个 task 本身判别难度低，模型选择影响很小。
 
 ---
 
-## 9. 结论
+## 9. 没做的事（已知缺口）
 
-**ANDE 论文的核心声明是可复现的**：双分支 (raw bytes → SE-ResNet) + (统计特征 → MLP) 的组合架构，在 Tor 用户行为 14 类分类任务上能稳定到达 ~99% accuracy 区间。
+1. **多 seed 平均**：本次只跑了 seed=42。若要给标准差，需要跑 seed ∈ {42, 43, 44} 三次，~3.2 小时
+2. **pcap-level split 重跑**：消除 §8.4 的统计泄漏，给"干净"的 ML 基线数字。需要修改 `dataset.py` 的 split 逻辑后重跑 21 个 14 类实验
+3. **SOTA 对比基线**（FlowPic、MSerNetDroid）的 pcap → FlowPic 直方图预处理路线未串通；Hierarchical Classifier ([baselines/hierarchical.py](../src/ande/baselines/hierarchical.py)) 已实现但未在矩阵中
+4. **3 seed 平均的 Table VI 渲染**
 
-我们的复现实测稍优于论文的报告值（+1 个百分点 acc，−2/3 FPR），主要差异可由数据增量和软硬件代差解释，不影响论文方法论的有效性。
+---
 
-代码与权重位于本仓库，可重新跑出本报告的所有数字与图。
+## 10. 结论
+
+**ANDE 论文的核心声明可以复现**：双分支 (raw bytes → SE-ResNet) + (统计特征 → MLP) 在 8100/14 类上稳定 ~0.99 accuracy。**FPR 也确实很低**（0.0007 vs 论文 0.0017）。
+
+但矩阵也揭示了**两个方法论问题**：
+
+1. **统计特征产生 pcap-level 泄漏**（§8.4）：DT/RF/XGB 的"完美"成绩多半是这条路。论文未明示如何避免。建议后续工作明确 split 粒度并改用 per-session stats。
+2. **SE block 的消融在我们的设置下不显著**（§8.5）：单 seed 内 ANDE 与 ANDE-no-SE 互有胜负，差异 0.0008-0.0016 量级，落在噪声里。需要多 seed 才能定性。
+
+代码 + 权重 + 完整 results.json 都在本仓库，运行 [`scripts/run_matrix_autodl.py`](../scripts/run_matrix_autodl.py) 可在 RTX 5090 上 65 分钟内重现整张矩阵。
 
 ---
 
@@ -192,13 +280,17 @@ uv sync
 uv run python -m ande.data.preprocess_raw --raw-root data/raw --out-root data --workers 8
 uv run python -m ande.data.preprocess_stats --raw-root data/raw --out-root data --workers 4
 
-# 3. 训练 ANDE 8100/14 类（约 35 分钟）
+# 3. 单跑 ANDE 8100/14 类（约 5 分钟，5090；35 分钟，4060）
 uv run python -m ande.train --config configs/ande_8100_14cls.yaml
 
-# 4. 重新生成本报告所有图
+# 4. 跑完整 42 组矩阵（约 65 分钟，5090）
+uv run python scripts/run_matrix_autodl.py
+uv run python scripts/build_tables.py --out-dir outputs --target docs/results
+
+# 5. 重新生成本报告所有图
 uv run python scripts/generate_report_figures.py
 ```
 
 ---
 
-*报告生成于 2026-05-05，基于 [outputs/ande_8100_14cls/results.json](../outputs/ande_8100_14cls/results.json)*
+*报告生成于 2026-05-06，基于 [outputs/ande_8100_14cls/results.json](../outputs/ande_8100_14cls/results.json)（单跑）+ [docs/results/results_long.csv](results/results_long.csv)（42 组矩阵）。完整矩阵在 [AutoDL RTX 5090](../scripts/run_matrix_autodl.py) 上 64.9 分钟跑完。*

@@ -1,0 +1,212 @@
+[
+  {
+    "run_name": "dt_784_binary2_seed42",
+    "duration_s": 3.587679862976074,
+    "returncode": 0
+  },
+  {
+    "run_name": "rf_784_binary2_seed42",
+    "duration_s": 4.35679292678833,
+    "returncode": 0
+  },
+  {
+    "run_name": "xgb_784_binary2_seed42",
+    "duration_s": 4.197812557220459,
+    "returncode": 0
+  },
+  {
+    "run_name": "cnn1d_784_binary2_seed42",
+    "duration_s": 96.84525609016418,
+    "returncode": 0
+  },
+  {
+    "run_name": "resnet18_784_binary2_seed42",
+    "duration_s": 177.0756697654724,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_784_binary2_seed42",
+    "duration_s": 103.99630641937256,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_nose_784_binary2_seed42",
+    "duration_s": 79.56389570236206,
+    "returncode": 0
+  },
+  {
+    "run_name": "dt_784_behavior14_seed42",
+    "duration_s": 3.7131481170654297,
+    "returncode": 0
+  },
+  {
+    "run_name": "rf_784_behavior14_seed42",
+    "duration_s": 4.4189348220825195,
+    "returncode": 0
+  },
+  {
+    "run_name": "xgb_784_behavior14_seed42",
+    "duration_s": 5.808507204055786,
+    "returncode": 0
+  },
+  {
+    "run_name": "cnn1d_784_behavior14_seed42",
+    "duration_s": 105.67646861076355,
+    "returncode": 0
+  },
+  {
+    "run_name": "resnet18_784_behavior14_seed42",
+    "duration_s": 174.71544551849365,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_784_behavior14_seed42",
+    "duration_s": 144.4845016002655,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_nose_784_behavior14_seed42",
+    "duration_s": 137.61123752593994,
+    "returncode": 0
+  },
+  {
+    "run_name": "dt_4096_binary2_seed42",
+    "duration_s": 3.807589054107666,
+    "returncode": 0
+  },
+  {
+    "run_name": "rf_4096_binary2_seed42",
+    "duration_s": 4.233265399932861,
+    "returncode": 0
+  },
+  {
+    "run_name": "xgb_4096_binary2_seed42",
+    "duration_s": 4.134246110916138,
+    "returncode": 0
+  },
+  {
+    "run_name": "cnn1d_4096_binary2_seed42",
+    "duration_s": 176.30910205841064,
+    "returncode": 0
+  },
+  {
+    "run_name": "resnet18_4096_binary2_seed42",
+    "duration_s": 173.33990669250488,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_4096_binary2_seed42",
+    "duration_s": 106.47678184509277,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_nose_4096_binary2_seed42",
+    "duration_s": 60.74267053604126,
+    "returncode": 0
+  },
+  {
+    "run_name": "dt_4096_behavior14_seed42",
+    "duration_s": 3.6466808319091797,
+    "returncode": 0
+  },
+  {
+    "run_name": "rf_4096_behavior14_seed42",
+    "duration_s": 4.3717803955078125,
+    "returncode": 0
+  },
+  {
+    "run_name": "xgb_4096_behavior14_seed42",
+    "duration_s": 5.449087858200073,
+    "returncode": 0
+  },
+  {
+    "run_name": "cnn1d_4096_behavior14_seed42",
+    "duration_s": 177.226717710495,
+    "returncode": 0
+  },
+  {
+    "run_name": "resnet18_4096_behavior14_seed42",
+    "duration_s": 198.1753625869751,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_4096_behavior14_seed42",
+    "duration_s": 168.4552915096283,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_nose_4096_behavior14_seed42",
+    "duration_s": 112.08700704574585,
+    "returncode": 0
+  },
+  {
+    "run_name": "dt_8100_binary2_seed42",
+    "duration_s": 3.7656197547912598,
+    "returncode": 0
+  },
+  {
+    "run_name": "rf_8100_binary2_seed42",
+    "duration_s": 4.177296876907349,
+    "returncode": 0
+  },
+  {
+    "run_name": "xgb_8100_binary2_seed42",
+    "duration_s": 4.12613844871521,
+    "returncode": 0
+  },
+  {
+    "run_name": "cnn1d_8100_binary2_seed42",
+    "duration_s": 293.7991223335266,
+    "returncode": 0
+  },
+  {
+    "run_name": "resnet18_8100_binary2_seed42",
+    "duration_s": 219.98277068138123,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_8100_binary2_seed42",
+    "duration_s": 123.87733244895935,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_nose_8100_binary2_seed42",
+    "duration_s": 116.51969528198242,
+    "returncode": 0
+  },
+  {
+    "run_name": "dt_8100_behavior14_seed42",
+    "duration_s": 3.6143462657928467,
+    "returncode": 0
+  },
+  {
+    "run_name": "rf_8100_behavior14_seed42",
+    "duration_s": 4.24615478515625,
+    "returncode": 0
+  },
+  {
+    "run_name": "xgb_8100_behavior14_seed42",
+    "duration_s": 5.84467625617981,
+    "returncode": 0
+  },
+  {
+    "run_name": "cnn1d_8100_behavior14_seed42",
+    "duration_s": 294.6283371448517,
+    "returncode": 0
+  },
+  {
+    "run_name": "resnet18_8100_behavior14_seed42",
+    "duration_s": 213.777494430542,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_8100_behavior14_seed42",
+    "duration_s": 224.14788269996643,
+    "returncode": 0
+  },
+  {
+    "run_name": "ande_nose_8100_behavior14_seed42",
+    "duration_s": 135.90726828575134,
+    "returncode": 0
+  }
+]

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -74,6 +75,7 @@ def run(config_path: str, model_name: str) -> dict:
         "config": config_path,
         "num_classes": num_classes,
         **metrics.to_dict(),
+        "config_dump": asdict(cfg),
     }
     (out / "results.json").write_text(json.dumps(payload, indent=2))
     LOG.info("metrics: %s", metrics.to_dict())

@@ -9,12 +9,53 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 
 import pandas as pd
+import yaml
 
 METRIC_COLS = ["accuracy", "precision", "f1", "recall", "fpr"]
+
+
+_RUN_NAME_RE = re.compile(
+    r"^(?P<method>[a-z0-9_]+?)_(?P<size>784|4096|8100)_(?P<task>binary2|behavior14)(?:_seed(?P<seed>\d+))?$"
+)
+
+
+def _fallback_from_run_name(run_name: str) -> dict | None:
+    """Parse method/size/task/seed from run_name like 'ande_nose_8100_behavior14_seed42'."""
+    if not run_name:
+        return None
+    m = _RUN_NAME_RE.match(run_name)
+    if not m:
+        return None
+    return {
+        "method": m.group("method"),
+        "size": int(m.group("size")),
+        "task": m.group("task"),
+        "seed": int(m.group("seed") or 0),
+    }
+
+
+def _fallback_from_config_path(config_path: str | None) -> dict | None:
+    if not config_path:
+        return None
+    p = Path(config_path)
+    if not p.exists():
+        return None
+    try:
+        cfg = yaml.safe_load(p.read_text())
+    except Exception:  # pragma: no cover
+        return None
+    data = cfg.get("data", {}) if cfg else {}
+    return {
+        "method": cfg.get("model", {}).get("name", "ande"),
+        "size": data.get("size"),
+        "task": data.get("task"),
+        "seed": cfg.get("seed", 0),
+    }
 
 
 def collect(out_dir: Path) -> pd.DataFrame:
@@ -28,14 +69,39 @@ def collect(out_dir: Path) -> pd.DataFrame:
         size = cfg.get("data", {}).get("size")
         task = cfg.get("data", {}).get("task")
         method = data.get("method") or cfg.get("model", {}).get("name", "ande")
+        seed = cfg.get("seed", 0)
+
+        # ANDE without SE distinguishing
         if cfg.get("model", {}).get("name") == "ande" and not cfg.get("model", {}).get("use_se", True):
             method = "ande_no_se"
+
+        # Fallbacks for results.json that lack config_dump (older ML baseline writes).
+        if size is None or task is None:
+            run_name = results.parent.name
+            # baseline outputs are nested under 'baseline_<model>_<run_name>'
+            for prefix in ("baseline_dt_", "baseline_rf_", "baseline_xgb_",
+                           "baseline_cnn1d_", "baseline_resnet18_", "baseline_hierarchical_"):
+                if run_name.startswith(prefix):
+                    run_name = run_name[len(prefix):]
+                    break
+            fb = _fallback_from_run_name(run_name) or _fallback_from_config_path(data.get("config"))
+            if fb:
+                size = size if size is not None else fb["size"]
+                task = task if task is not None else fb["task"]
+                seed = seed or fb["seed"]
+                if method in ("ande", None):
+                    method = fb["method"]
+
+        # Normalise method names: ande_nose -> ande_no_se to match config-dump output
+        if method == "ande_nose":
+            method = "ande_no_se"
+
         rows.append(
             {
                 "method": method,
                 "size": size,
                 "task": task,
-                "seed": data.get("config_dump", {}).get("seed", 0),
+                "seed": seed,
                 **{k: data.get(k) for k in METRIC_COLS},
             }
         )
