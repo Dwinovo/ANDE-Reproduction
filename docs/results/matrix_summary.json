@@ -1,212 +1,212 @@
 [
   {
     "run_name": "dt_784_binary2_seed42",
-    "duration_s": 3.587679862976074,
+    "duration_s": 3.772820472717285,
     "returncode": 0
   },
   {
     "run_name": "rf_784_binary2_seed42",
-    "duration_s": 4.35679292678833,
+    "duration_s": 4.008265018463135,
     "returncode": 0
   },
   {
     "run_name": "xgb_784_binary2_seed42",
-    "duration_s": 4.197812557220459,
+    "duration_s": 3.962841510772705,
     "returncode": 0
   },
   {
     "run_name": "cnn1d_784_binary2_seed42",
-    "duration_s": 96.84525609016418,
+    "duration_s": 100.54872417449951,
     "returncode": 0
   },
   {
     "run_name": "resnet18_784_binary2_seed42",
-    "duration_s": 177.0756697654724,
+    "duration_s": 198.11839985847473,
     "returncode": 0
   },
   {
     "run_name": "ande_784_binary2_seed42",
-    "duration_s": 103.99630641937256,
+    "duration_s": 119.86912655830383,
     "returncode": 0
   },
   {
     "run_name": "ande_nose_784_binary2_seed42",
-    "duration_s": 79.56389570236206,
+    "duration_s": 83.19650912284851,
     "returncode": 0
   },
   {
     "run_name": "dt_784_behavior14_seed42",
-    "duration_s": 3.7131481170654297,
+    "duration_s": 3.7164154052734375,
     "returncode": 0
   },
   {
     "run_name": "rf_784_behavior14_seed42",
-    "duration_s": 4.4189348220825195,
+    "duration_s": 4.24913215637207,
     "returncode": 0
   },
   {
     "run_name": "xgb_784_behavior14_seed42",
-    "duration_s": 5.808507204055786,
+    "duration_s": 5.824270963668823,
     "returncode": 0
   },
   {
     "run_name": "cnn1d_784_behavior14_seed42",
-    "duration_s": 105.67646861076355,
+    "duration_s": 100.41632390022278,
     "returncode": 0
   },
   {
     "run_name": "resnet18_784_behavior14_seed42",
-    "duration_s": 174.71544551849365,
+    "duration_s": 194.94895601272583,
     "returncode": 0
   },
   {
     "run_name": "ande_784_behavior14_seed42",
-    "duration_s": 144.4845016002655,
+    "duration_s": 130.5403277873993,
     "returncode": 0
   },
   {
     "run_name": "ande_nose_784_behavior14_seed42",
-    "duration_s": 137.61123752593994,
+    "duration_s": 122.6806116104126,
     "returncode": 0
   },
   {
     "run_name": "dt_4096_binary2_seed42",
-    "duration_s": 3.807589054107666,
+    "duration_s": 3.705288887023926,
     "returncode": 0
   },
   {
     "run_name": "rf_4096_binary2_seed42",
-    "duration_s": 4.233265399932861,
+    "duration_s": 4.411862134933472,
     "returncode": 0
   },
   {
     "run_name": "xgb_4096_binary2_seed42",
-    "duration_s": 4.134246110916138,
+    "duration_s": 4.20505952835083,
     "returncode": 0
   },
   {
     "run_name": "cnn1d_4096_binary2_seed42",
-    "duration_s": 176.30910205841064,
+    "duration_s": 184.15111446380615,
     "returncode": 0
   },
   {
     "run_name": "resnet18_4096_binary2_seed42",
-    "duration_s": 173.33990669250488,
+    "duration_s": 213.7336859703064,
     "returncode": 0
   },
   {
     "run_name": "ande_4096_binary2_seed42",
-    "duration_s": 106.47678184509277,
+    "duration_s": 105.71651792526245,
     "returncode": 0
   },
   {
     "run_name": "ande_nose_4096_binary2_seed42",
-    "duration_s": 60.74267053604126,
+    "duration_s": 81.15842127799988,
     "returncode": 0
   },
   {
     "run_name": "dt_4096_behavior14_seed42",
-    "duration_s": 3.6466808319091797,
+    "duration_s": 3.6565535068511963,
     "returncode": 0
   },
   {
     "run_name": "rf_4096_behavior14_seed42",
-    "duration_s": 4.3717803955078125,
+    "duration_s": 4.16972541809082,
     "returncode": 0
   },
   {
     "run_name": "xgb_4096_behavior14_seed42",
-    "duration_s": 5.449087858200073,
+    "duration_s": 6.064184665679932,
     "returncode": 0
   },
   {
     "run_name": "cnn1d_4096_behavior14_seed42",
-    "duration_s": 177.226717710495,
+    "duration_s": 187.1251344680786,
     "returncode": 0
   },
   {
     "run_name": "resnet18_4096_behavior14_seed42",
-    "duration_s": 198.1753625869751,
+    "duration_s": 210.6479926109314,
     "returncode": 0
   },
   {
     "run_name": "ande_4096_behavior14_seed42",
-    "duration_s": 168.4552915096283,
+    "duration_s": 172.214830160141,
     "returncode": 0
   },
   {
     "run_name": "ande_nose_4096_behavior14_seed42",
-    "duration_s": 112.08700704574585,
+    "duration_s": 109.1741144657135,
     "returncode": 0
   },
   {
     "run_name": "dt_8100_binary2_seed42",
-    "duration_s": 3.7656197547912598,
+    "duration_s": 3.6259372234344482,
     "returncode": 0
   },
   {
     "run_name": "rf_8100_binary2_seed42",
-    "duration_s": 4.177296876907349,
+    "duration_s": 4.290771007537842,
     "returncode": 0
   },
   {
     "run_name": "xgb_8100_binary2_seed42",
-    "duration_s": 4.12613844871521,
+    "duration_s": 4.074992656707764,
     "returncode": 0
   },
   {
     "run_name": "cnn1d_8100_binary2_seed42",
-    "duration_s": 293.7991223335266,
+    "duration_s": 300.5684304237366,
     "returncode": 0
   },
   {
     "run_name": "resnet18_8100_binary2_seed42",
-    "duration_s": 219.98277068138123,
+    "duration_s": 219.86536407470703,
     "returncode": 0
   },
   {
     "run_name": "ande_8100_binary2_seed42",
-    "duration_s": 123.87733244895935,
+    "duration_s": 89.50178289413452,
     "returncode": 0
   },
   {
     "run_name": "ande_nose_8100_binary2_seed42",
-    "duration_s": 116.51969528198242,
+    "duration_s": 70.79052925109863,
     "returncode": 0
   },
   {
     "run_name": "dt_8100_behavior14_seed42",
-    "duration_s": 3.6143462657928467,
+    "duration_s": 3.8236184120178223,
     "returncode": 0
   },
   {
     "run_name": "rf_8100_behavior14_seed42",
-    "duration_s": 4.24615478515625,
+    "duration_s": 4.2625041007995605,
     "returncode": 0
   },
   {
     "run_name": "xgb_8100_behavior14_seed42",
-    "duration_s": 5.84467625617981,
+    "duration_s": 5.276478290557861,
     "returncode": 0
   },
   {
     "run_name": "cnn1d_8100_behavior14_seed42",
-    "duration_s": 294.6283371448517,
+    "duration_s": 293.4390025138855,
     "returncode": 0
   },
   {
     "run_name": "resnet18_8100_behavior14_seed42",
-    "duration_s": 213.777494430542,
+    "duration_s": 230.3135645389557,
     "returncode": 0
   },
   {
     "run_name": "ande_8100_behavior14_seed42",
-    "duration_s": 224.14788269996643,
+    "duration_s": 147.88907980918884,
     "returncode": 0
   },
   {
     "run_name": "ande_nose_8100_behavior14_seed42",
-    "duration_s": 135.90726828575134,
+    "duration_s": 118.47063088417053,
     "returncode": 0
   }
 ]

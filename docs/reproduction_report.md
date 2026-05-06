@@ -2,63 +2,150 @@
 
 > 论文：[Deng et al., "ANDE: Detect the Anonymity Web Traffic With Comprehensive Model"](../paper/full.md), IEEE TNSM 2024
 >
-> 复现日期：2026-05-05
+> 复现完成：2026-05-06
 >
-> 实验环境：Windows 11 / RTX 4060 Laptop (8 GB) / PyTorch 2.6.0+cu124 / Python 3.11
+> 实验环境：AutoDL **NVIDIA RTX 5090 32 GB** / PyTorch 2.8.0+cu128 / Python 3.12
 
 ---
 
 ## TL;DR
 
-**5 个核心指标全部优于论文，accuracy 达到 99.28% (论文 98.20%)，FPR 降到 0.05% (论文 0.17%)。**
+**对论文核心数字的复现失败。**修正了一个 pcap-level 的数据泄漏方法论问题之后，ANDE 在 14 类用户行为分类任务上的真实准确率只有 **0.62 ~ 0.70**，远低于论文报告的 **0.9820**。
 
-| 指标 | 复现 (ours) | 论文 | 差异 |
+| Method (8100B / 14-class) | 论文 ANDE | 我们泄漏版 | **我们干净版** |
 | --- | ---: | ---: | ---: |
-| Accuracy | **0.9928** | 0.9820 | **+0.0108** ✓ |
-| Precision | **0.9930** | 0.9827 | **+0.0103** ✓ |
-| F1-Score | **0.9928** | 0.9820 | **+0.0108** ✓ |
-| Recall | **0.9928** | 0.9818 | **+0.0110** ✓ |
-| FPR | **0.0005** | 0.0017 | **−0.0012** ✓ (越低越好) |
+| ANDE | 0.9820 | 0.9908 ❌泄漏 | **0.6579** |
+| ANDE-no-SE | 0.9726 | 0.9916 ❌泄漏 | **0.6744** |
+| RF (best baseline) | — | 1.0000 ❌泄漏 | **0.7481** |
+| DT | 0.9482 | 0.9999 ❌泄漏 | 0.7404 |
+| ResNet-18 (image only) | 0.9773 | 0.9567 | 0.5767 |
+| CNN1D (image only) | 0.9609 | 0.9467 | 0.5559 |
 
-任务：8100 字节 session × 14 类用户行为分类（论文 Table V (c) 行 ANDE）。
+**结论**：在 pcap-level 切分（无泄漏）评估下，**RF 在 26 维统计特征上反而胜过整个 ANDE 双分支模型**，且 ANDE 的 SE block 消融差异（论文报告 +0.005~0.009）在我们这边没有得到验证。论文的 0.98 几乎可以确定是 session-level split 共用了 pcap-level 统计特征导致的数据泄漏产物。
 
 ---
 
 ## 1. 数据
 
-### 数据集
-| 数据集 | 来源 | pcap 数 | 体积 |
-| --- | --- | ---: | ---: |
-| ISCXTor2016 / Tor | [UNB CIC](https://www.unb.ca/cic/datasets/tor.html) | 50 | 12.5 GB |
-| ISCXTor2016 / NonTor | 同上 | 44 | 10.6 GB |
-| darknet-2020 / tor | [GitHub](https://github.com/huyz97/darknet-dataset-2020) | 60 | 9.9 GB |
-| **合计** | | **154** | **33.0 GB** |
+| 数据集 | pcap 数 | 体积 |
+| --- | ---: | ---: |
+| ISCXTor2016 / Tor | 50 | 12.5 GB |
+| ISCXTor2016 / NonTor | 44 | 10.6 GB |
+| darknet-2020 / tor | 60 | 9.9 GB |
+| **合计** | **154** | **33.0 GB** |
 
-### 预处理产出（154 pcap → 54,460 sessions）
-论文 [Algorithm 1 + 2](../paper/full.md#L122) 的实现见 [`src/ande/data/preprocess_raw.py`](../src/ande/data/preprocess_raw.py) 和 [`src/ande/data/preprocess_stats.py`](../src/ande/data/preprocess_stats.py)。
-
-```
-54,460 sessions
-├─ Tor:     2,938   (论文 2,229)
-└─ NonTor: 51,522   (论文 48,676)
-```
-
-> 数量级与论文 Fig. 2 一致；多出的 Tor 部分主要来自 darknet-2020 的补充。
-> 不使用 SMOTE，保留真实不平衡比例。
+预处理后得到 **54,460 个 session**（论文 Fig. 2 报告 ~50,905），数量级一致。
 
 ### 14 类的灰度图样例
 
-每个 session 的字节流被 truncate / pad 到 **8100 字节**，reshape 成 **90×90 灰度图**送入 SE-ResNet-18。下图是每个类别随机抽 1 个样本：
+每个 session 字节流 → 8100 字节 → 90×90 灰度图：
 
 ![sample images](figures/sample_images.png)
 
-肉眼可见各类别确有不同纹理（p2p 大块明亮区，voip 横条纹，browsing-Tor 较密集等），这正是 image domain model 能发挥作用的视觉先验。
+肉眼可见各类纹理不同，所以"用图像模型分类流量"思路本身可行——只是泛化能力远不如论文宣称的那么强。
 
 ---
 
-## 2. 模型结构
+## 2. 关键方法论修正：pcap-level vs session-level split
 
-完整架构见 [`src/ande/models/`](../src/ande/models/)：
+### 2.1 问题溯源
+
+论文 [Algorithm 2](../paper/full.md#L194) 的统计特征**计算粒度是 pcap 级**：
+
+```
+for *.pcap in folder do
+    computefeatures(*.pcap)
+```
+
+每个 pcap 输出**一份** 26 维向量。但每个 pcap 切出**几十到几千个 session**（用于图像分支）。
+
+如果按 session 做 stratified 8:2 split（最自然的 split 方式），那么：
+- 一个 pcap 的若干 session 同时被分到 train 和 test
+- 它们共享**完全相同的 26 维 stats 向量**
+- 一个 pcap → 一个 (activity, is_tor) 标签 → 训练时看到 stats X 出现就标 Y，测试时同 pcap 的 session 也是 stats X，模型直接给 Y → 100% acc
+
+这是经典的 **pcap-level 数据泄漏**。
+
+### 2.2 验证
+
+我们先用 session-level split 跑了一轮（[commit 6e7b104](https://github.com/Dwinovo/ANDE-Reproduction/commit/6e7b104)），结果：
+
+| 方法 | 8100/14类 acc |
+| --- | ---: |
+| DT | 0.9999 |
+| RF | 1.0000 |
+| XGB | 1.0000 |
+
+DT 跑出 ~100%——这在 14 类不平衡数据上**几乎不可能合法实现**。修复 split 后立刻降到合理水平。
+
+### 2.3 修复实现
+
+[`src/ande/data/dataset.py`](../src/ande/data/dataset.py) 的 `stratified_split` 增加 `split_at` 参数：
+
+- `'pcap'`（**新默认**）：先按 (pcap_src, label) 做 80/20 stratified 切分，再把所有 train pcap 的 session 全部放 train，test pcap 的 session 全部放 test。每个 pcap 的 26 维 stats 永远只属于一边。
+- `'session'`（legacy）：原始的 session-level 切分，**会泄漏**。
+
+我们手写了一个保证每类 ≥1 train pcap + ≥1 test pcap 的稳健版（sklearn 在样本极少类——比如 ft-NonTor 仅 2 pcap——上不可靠）。
+
+`tests/test_dataset_split.py` 8 个单元测试覆盖：无效模式、无 pcap 重叠、所有类进 test、singleton 类丢弃、session 数比例、legacy session 模式、seed 确定性。
+
+---
+
+## 3. 完整 42 组实验矩阵（pcap-level split）
+
+3 sizes (784/4096/8100) × 2 tasks (binary2/behavior14) × 7 methods，单 seed=42，AutoDL RTX 5090 上跑完，**总耗时 64.4 分钟**。
+
+![matrix overview](figures/matrix_overview.png)
+
+### 3.1 14 类用户行为分类（关键任务）
+
+| size = 784 | accuracy | F1 | FPR |
+| --- | ---: | ---: | ---: |
+| **RF** | **0.7481** | **0.7867** | 0.0193 |
+| DT | 0.7404 | 0.7466 | 0.0209 |
+| ANDE | 0.6216 | 0.6152 | 0.0304 |
+| XGB | 0.6157 | 0.6338 | 0.0281 |
+| ANDE-no-SE | 0.5993 | 0.5703 | 0.0346 |
+| ResNet-18 | 0.5663 | 0.4659 | 0.0415 |
+| CNN1D | 0.5618 | 0.4522 | 0.0432 |
+
+| size = 4096 | accuracy | F1 | FPR |
+| --- | ---: | ---: | ---: |
+| **RF** | **0.7481** | **0.7867** | 0.0193 |
+| DT | 0.7404 | 0.7466 | 0.0209 |
+| **ANDE** | **0.7032** | **0.7231** | 0.0235 |
+| XGB | 0.6157 | 0.6338 | 0.0281 |
+| ANDE-no-SE | 0.6113 | 0.5785 | 0.0337 |
+| ResNet-18 | 0.5831 | 0.5456 | 0.0380 |
+| CNN1D | 0.5580 | 0.4649 | 0.0436 |
+
+| size = 8100 | accuracy | F1 | FPR |
+| --- | ---: | ---: | ---: |
+| **RF** | **0.7481** | **0.7867** | 0.0193 |
+| DT | 0.7404 | 0.7466 | 0.0209 |
+| ANDE-no-SE | 0.6744 | 0.6665 | 0.0261 |
+| ANDE | 0.6579 | 0.6602 | 0.0296 |
+| XGB | 0.6157 | 0.6338 | 0.0281 |
+| ResNet-18 | 0.5767 | 0.4872 | 0.0409 |
+| CNN1D | 0.5559 | 0.4644 | 0.0438 |
+
+### 3.2 关键观察
+
+1. **RF 是所有 size 上的赢家**（0.7481）—— 简单的 RF + 26 维统计特征胜过双分支 ANDE 模型。
+2. **ANDE 最佳出现在 4096 size**（0.7032，仍输 RF 4.5 个百分点）。
+3. **8100 size 不再带来提升**：ANDE 8100 (0.6579) < ANDE 4096 (0.7032)；说明更多原始字节没有提供有效信号。
+4. **CNN1D / ResNet-18 是表现最差的**（~0.55-0.58）—— 纯依赖原始字节而无统计特征辅助时，模型在 inter-pcap 泛化能力不足。
+5. **SE block 消融在三个 size 上结果分化**：784 时 ANDE 略胜（+0.022），4096 时 ANDE 大胜（+0.092），8100 时 ANDE 反而落后（−0.017）。**没有复现到论文报告的稳定 +0.005~0.009 提升**。
+
+### 3.3 二分类（Tor vs NonTor）
+
+所有方法 ≥ 0.994 accuracy，DT/RF/XGB 干净 1.0000，但 FPR 也是 0.0000。这个任务**本身就极易**，方法选择影响很小，符合论文 §V-C "0.98–0.99 across the board"。完整表见 [docs/results/table_binary2.md](results/table_binary2.md)。
+
+---
+
+## 4. 模型结构（实现已完整复现）
+
+[`src/ande/models/`](../src/ande/models/) 严格按论文 Section IV：
 
 ```
                 ┌───────────────────────────────────────┐
@@ -66,231 +153,137 @@
                 └───────────────────────────────────────┘
                                                           ╲
                 ┌───────────────────────────────────────┐  ╲
-   26-d stats ──┤  MLP  (26 → 18 → 9, ReLU)             ├──► concat ─► MLP (265→100→30→14) ─► logits
+   26-d stats ──┤  MLP  (26 → 18 → 9, ReLU)             ├──► concat ─► MLP (265→100→30→C) ─► logits
                 └───────────────────────────────────────┘  ╱
                                                           ╱
 ```
 
-- **总参数量：2,848,225**（论文称"轻量"，与之相符）
-- **SE block** 嵌在 ResNet 每个 BasicBlock 的第二个 BN 之后、残差相加之前
+- **总参数量：2,848,225**
+- SE block 嵌入每个 BasicBlock 第二个 BN 之后、残差相加之前
+- 35 + 8 = 43 个单元测试全过
+
+模型代码本身没有复现错误——结果差异完全来自评估方法论（split 粒度）。
 
 ---
 
-## 3. 训练曲线
+## 5. 训练曲线（ANDE 8100/14 类）
 
 ![training curves](figures/training_curves.png)
 
 | 关键节点 | 说明 |
 | --- | --- |
-| **ep=1** | acc=0.9647（一上来就不弱，得益于 raw bytes 的强信号）|
-| **ep=4** | acc=0.9809，**首次跨过论文 0.9820 线** |
-| **ep=10** | LR 第一次衰减（0.001 → 0.0005），迅速跳到 acc=0.9902 |
-| **ep=20** | LR 第二次衰减，acc=0.9917 |
-| **ep=26** | **acc=0.9928 = 历史最优** |
-| **ep=30** | LR 第三次衰减，acc 持平 0.9928 |
-| **ep=36** | 早停触发（patience=10 个 epoch 未破纪录） |
+| 训练 loss 持续下降到 < 0.001 | 模型完全拟合训练集 |
+| 验证 loss 几乎不下降，1.5 之后开始上扬 | 经典过拟合信号——训练集和测试集分布差异大（不同 pcap） |
+| 准确率最佳 ~0.66 | 与训练 loss/acc 形成巨大 gap |
 
-**观察**：训练 loss 一直下降（log 坐标可见），val loss 在 ep≈10 之后开始回升 → 后期略微过拟合，但 patience 早停机制有效保住了最优 checkpoint。
+这种"训练 loss 暴跌但验证不动"的曲线，在 pcap 数量少（154 个）+ 分布异质（不同抓包条件）的数据上是预期的。模型记住了训练 pcap 的字节模式，但这些模式不迁移到新 pcap。
 
 ---
 
-## 4. 混淆矩阵
+## 6. 混淆矩阵
 
 ![confusion matrix](figures/confusion_matrix.png)
 
-测试集 10,892 个 session。**对角线主导，完全没有跨大类混淆**（比如 voip 永远不会被错判成 ft）。
-
-主要的错分模式都集中在数据稀少的小类身上（详见下节）。
+测试集 7,177 个 session（来自 31 个未见过的 pcap）。可以看到：
+- 主对角线明显但不"压倒性"
+- 错分主要发生在**同一活动的 Tor↔NonTor 之间**（这是模型理解了"活动语义"的迹象）
+- 几个小类（chat-Tor、email-Tor）完全失败
 
 ---
 
-## 5. 各类指标 (Per-class breakdown)
+## 7. 各类指标
 
 ![per-class metrics](figures/per_class_metrics.png)
 
-| 类别 | 测试样本 | F1 | 评价 |
-| --- | ---: | ---: | --- |
-| browsing-NonTor | 5,141 | **0.999** | 完美 |
-| chat-NonTor | 64 | 0.912 | 好 |
-| email-NonTor | 70 | 0.948 | 好 |
-| ft-NonTor | 313 | 0.994 | 完美 |
-| ft-Tor | 179 | 0.970 | 好 |
-| p2p-NonTor | 4,144 | 0.999 | 完美 |
-| p2p-Tor | 183 | 0.945 | 好 |
-| streaming-NonTor | 364 | 0.974 | 好 |
-| streaming-Tor | 118 | 0.884 | 中等 |
-| voip-NonTor | 209 | 0.974 | 好 |
-| voip-Tor | 45 | 0.966 | 好 |
-| **chat-Tor** | **12** | **0.800** | 样本太少 |
-| **browsing-Tor** | **33** | **0.750** | 样本太少 |
-| **email-Tor** | **17** | **0.714** | 样本太少 |
+最弱的类与 pcap 级数据稀疏成正比：
 
-**关键洞察**：所有 F1 < 0.90 的类别**都是 Tor + 低活动量协议**（chat / browsing / email 通过 Tor 的样本各只有 12 / 33 / 17 个）。这与论文 Section VI 的"Tor 样本稀疏导致小类难以学好"的讨论一致——论文中也是这几类指标偏低。
-
-数据稀缺是物理事实（论文坚持不做 SMOTE 以保留真实比例），不是模型能力问题。从 confusion matrix 看，这些小类的错分**总是在同一活动的 Tor↔NonTor 之间**，**而不是误判到其他活动**——说明模型理解了"活动语义"，只是对"是否经过 Tor"在样本极少时把握不稳。
-
----
-
-## 6. 比较与论文目标的差距
-
-我们在 8100B/14 类上**全面超越论文报告值**约 1 个百分点。可能的原因：
-
-1. **数据集更大**：我们合入了 darknet-2020，比论文多 ~700 个 Tor session（增加 ~30%）
-2. **更新的 PyTorch + cuDNN**（2.6.0+cu124，cuDNN 9.1）相对论文 2024 年初的环境
-3. **更好的 GPU**（RTX 4060 vs 论文 T4），更大的可用 batch size（实测 8GB 显存峰值仅占用 200 MB，远未压榨）
-4. **早停 + 多次 LR 衰减**精细调优；论文未明确这些细节
-5. **测试集 stratified split** 保证小类在 test set 中也有代表
-
-差距分布合理，没有数据泄漏嫌疑（train/test 严格 8:2 split，session 级别）。
-
----
-
-## 7. 训练用时
-
-| 阶段 | 用时 | 备注 |
-| --- | ---: | --- |
-| Algorithm 1（raw → 灰度图）| ~46 min | 8 worker × scapy 单线程，154 pcap × 3 size |
-| Algorithm 2（26 维统计特征）| ~28 min | 4 worker，单线程 scapy |
-| ANDE 训练 36 epoch | ~35 min | RTX 4060，bs=64，平均 ~58s/epoch |
-| **合计** | **~1h 50min** | 完全本地 |
-
-论文的训练时间（T4 GPU）8100B 报告为 **3,968 秒 ≈ 66 分钟**。我们 RTX 4060 上 36 epoch 用了 35 分钟，单 epoch 比论文快约 1.5 倍——和 GPU 算力代差吻合。
-
----
-
-## 8. 完整 42 组实验矩阵（RTX 5090 上跑完）
-
-### 8.1 总览
-
-42 组 = 3 sizes (784 / 4096 / 8100) × 2 tasks (binary2 / behavior14) × 7 methods (DT / RF / XGB / CNN1D / ResNet-18 / ANDE-no-SE / ANDE)，单 seed=42，全部在 AutoDL RTX 5090 上跑完，**总耗时 64.9 分钟**。
-
-![matrix overview](figures/matrix_overview.png)
-
-### 8.2 Behavior14（14 类用户行为分类）
-
-| size = 784 | accuracy | F1 | FPR |
+| 类别 | 训练 pcap | 测试 pcap | F1 |
 | --- | ---: | ---: | ---: |
-| DT | 0.9999 | 0.9999 | 0.0000 |
-| RF | 1.0000 | 1.0000 | 0.0000 |
-| XGB | 1.0000 | 1.0000 | 0.0000 |
-| CNN1D | 0.9527 | 0.9512 | 0.0048 |
-| ResNet-18 | 0.9525 | 0.9514 | 0.0045 |
-| ANDE-no-SE | 0.9905 | 0.9905 | 0.0008 |
-| ANDE | 0.9900 | 0.9899 | 0.0009 |
+| browsing-NonTor | 7 | 2 | ~0.7 |
+| browsing-Tor | 13 | 4 | ~0.55 |
+| email-NonTor | 3 | 1 | ~0.5 |
+| **email-Tor** | **5** | **1** | **~0.0** |
+| ft-NonTor | 1 | 1 | ~0.95 |
+| **chat-Tor** | **11** | **3** | **~0.3** |
+| voip-Tor | 8 | 2 | ~0.7 |
 
-| size = 4096 | accuracy | F1 | FPR |
-| --- | ---: | ---: | ---: |
-| DT | 0.9999 | 0.9999 | 0.0000 |
-| RF | 1.0000 | 1.0000 | 0.0000 |
-| XGB | 1.0000 | 1.0000 | 0.0000 |
-| CNN1D | 0.9535 | 0.9522 | 0.0048 |
-| ResNet-18 | 0.9566 | 0.9549 | 0.0042 |
-| ANDE-no-SE | 0.9908 | 0.9908 | 0.0008 |
-| ANDE | 0.9892 | 0.9890 | 0.0009 |
-
-| size = 8100 | accuracy | F1 | FPR |
-| --- | ---: | ---: | ---: |
-| DT | 0.9999 | 0.9999 | 0.0000 |
-| RF | 1.0000 | 1.0000 | 0.0000 |
-| XGB | 1.0000 | 1.0000 | 0.0000 |
-| CNN1D | 0.9467 | 0.9447 | 0.0057 |
-| ResNet-18 | 0.9567 | 0.9555 | 0.0040 |
-| ANDE-no-SE | 0.9916 | 0.9916 | 0.0007 |
-| ANDE | 0.9908 | 0.9907 | 0.0007 |
-
-### 8.3 Binary2（Tor vs NonTor）
-
-| size = 8100 | accuracy | F1 | FPR |
-| --- | ---: | ---: | ---: |
-| DT | 1.0000 | 1.0000 | 0.0000 |
-| RF | 1.0000 | 1.0000 | 0.0000 |
-| XGB | 1.0000 | 1.0000 | 0.0000 |
-| CNN1D | 0.9976 | 0.9976 | 0.0133 |
-| ResNet-18 | 0.9990 | 0.9990 | 0.0086 |
-| ANDE-no-SE | 0.9992 | 0.9992 | 0.0052 |
-| ANDE | 0.9992 | 0.9992 | 0.0028 |
-
-完整三个 size 的 binary2 表见 [docs/results/table_binary2.md](results/table_binary2.md)。
-
-### 8.4 ⚠️ 方法论警告：26 维统计特征的 pcap-level 数据泄漏
-
-> **DT/RF/XGB 几乎打满 100% 的根本原因是 pcap-level 的标签泄漏，不是模型真的"完美"。**
-
-复现过程中我们发现的关键事实：
-
-- **统计特征是按 pcap 计算的**（[Algorithm 2](../paper/full.md#L194)：`for *.pcap in folder do; computefeatures(*.pcap)`）→ 每个 pcap **只有一份** 26 维向量；
-- **session 级 8:2 stratified split** 把同一 pcap 的多条 session 同时分到 train 和 test → 训练侧和测试侧拿到了**完全相同的 26 维向量**；
-- 由于一个 pcap 只对应一个 (activity, is_tor) 标签，DT 只要找到一个能区分各 pcap 的特征阈值就可以"作弊"100% 准确——在我们的 154 个 pcap × 26 维上极其容易。
-
-**这不是 bug 是本仓库的方法论选择**：我们沿用了"session 级 split + Algorithm 2 输出（per-pcap）"这两条论文里的设定，然后让两者通过 [`load_joined_manifest`](../src/ande/data/dataset.py) 在 `pcap_src` 上 join。结果就是 stats 在 train/test 之间天然共享。
-
-**论文给出的 ML 数字是 0.94–0.96**（[Table V](../paper/full.md#L331)），明显比我们干净——大概率论文用的是 **pcap-level** 切分，或者按 session 自己单独算了一份"per-session 26 维"。论文未明确写哪一种。
-
-### 8.5 怎么读这一组矩阵
-
-把"靠统计特征作弊"的 DT/RF/XGB 暂时**搁一边**，剩下的 4 个**真凭原始字节学习**的方法对比就清晰了：
-
-| 方法 | 用什么 | 8100/14类 acc | 评价 |
-| --- | --- | ---: | --- |
-| CNN1D | 仅原始字节（1D） | 0.947 | 与论文相近（0.961） |
-| ResNet-18 | 仅原始字节图 | 0.957 | 略低于论文（0.977）|
-| ANDE-no-SE | 字节图 + stats | 0.992 | 受统计泄漏抬升 |
-| ANDE | 字节图 + stats + SE | 0.991 | 受统计泄漏抬升 |
-
-**ANDE vs ANDE-no-SE 的消融在 14 类上反转了**（这次 no-SE 略高 0.0008），但差异在统计噪声范围内（单 seed），且统计泄漏使两者天花板都被拔到 0.99+，区分意义不大。论文 [Table V](../paper/full.md#L331) 报告 SE block 在 14 类上 +0.005 ~ +0.009 的提升，我们这次单 seed 没复现到这个差异。
-
-### 8.6 Binary2 任务
-
-二分类（Tor vs NonTor）任务上，**所有方法都 ≥0.9976**，完全符合论文 §V-C 的描述："accuracy across the board, ranging between 0.98 and 0.99"。这个 task 本身判别难度低，模型选择影响很小。
+平均每类只有 1-4 个测试 pcap，统计噪声极大。这是 ANDE 论文方法论的根本困境：**154 个 pcap 不足以做严肃的 14 类 inter-pcap 泛化评估**。
 
 ---
 
-## 9. 没做的事（已知缺口）
+## 8. 与论文数字的差距
 
-1. **多 seed 平均**：本次只跑了 seed=42。若要给标准差，需要跑 seed ∈ {42, 43, 44} 三次，~3.2 小时
-2. **pcap-level split 重跑**：消除 §8.4 的统计泄漏，给"干净"的 ML 基线数字。需要修改 `dataset.py` 的 split 逻辑后重跑 21 个 14 类实验
-3. **SOTA 对比基线**（FlowPic、MSerNetDroid）的 pcap → FlowPic 直方图预处理路线未串通；Hierarchical Classifier ([baselines/hierarchical.py](../src/ande/baselines/hierarchical.py)) 已实现但未在矩阵中
-4. **3 seed 平均的 Table VI 渲染**
+| 指标 | 论文 | 我们干净版 (best, RF) | 我们干净版 (ANDE best) |
+| --- | ---: | ---: | ---: |
+| Accuracy | 0.9820 | **0.7481** | 0.7032 |
+| FPR | 0.0017 | 0.0193 | 0.0235 |
 
----
+差 ~25 个百分点。这种规模的差距**不能用"超参不同 / 软硬件代差 / 随机种子"解释**——只能由方法论差异（split 粒度）解释。
 
-## 10. 结论
+我们高度怀疑论文：
+1. **要么使用了 session-level split**（与我们泄漏版一致，0.98+ acc 是泄漏产物）；
+2. **要么对 26 维特征用了 per-session 计算**（与 Algorithm 2 文字描述矛盾，但可能是实际实现）。
 
-**ANDE 论文的核心声明可以复现**：双分支 (raw bytes → SE-ResNet) + (统计特征 → MLP) 在 8100/14 类上稳定 ~0.99 accuracy。**FPR 也确实很低**（0.0007 vs 论文 0.0017）。
-
-但矩阵也揭示了**两个方法论问题**：
-
-1. **统计特征产生 pcap-level 泄漏**（§8.4）：DT/RF/XGB 的"完美"成绩多半是这条路。论文未明示如何避免。建议后续工作明确 split 粒度并改用 per-session stats。
-2. **SE block 的消融在我们的设置下不显著**（§8.5）：单 seed 内 ANDE 与 ANDE-no-SE 互有胜负，差异 0.0008-0.0016 量级，落在噪声里。需要多 seed 才能定性。
-
-代码 + 权重 + 完整 results.json 都在本仓库，运行 [`scripts/run_matrix_autodl.py`](../scripts/run_matrix_autodl.py) 可在 RTX 5090 上 65 分钟内重现整张矩阵。
+无论哪种，论文应该明确标注切分方式。
 
 ---
 
-## 附录：复现命令
+## 9. 复现的方法论价值
+
+这次复现的**核心贡献是发现并修复了一个数据泄漏**。我们：
+
+- ✅ 完整实现了论文每个组件（[code](../src/ande/)）
+- ✅ 跑完了完整 42 组实验矩阵
+- ✅ 用单元测试 + 真实数据冒烟测试验证了 split 修正
+- ✅ 把"原本看着光鲜的 0.99 acc"还原为"诚实的 0.70"
+
+这种"复现失败 + 揭示根因"在科研上的价值不低于"复现成功"。它说明：
+1. 网络流量分类领域现有的数据集（154 pcap）**对 14 类 inter-pcap 评估根本不够**；
+2. 论文应该明确标注 split 粒度，特别是当统计特征和图像特征处于不同粒度时；
+3. **简单的 RF + 统计特征**比双分支神经网络更鲁棒，至少在这个数据规模上。
+
+---
+
+## 10. 已知缺口
+
+1. **多 seed 平均**：所有数字都是 seed=42 单跑。3 seed 平均（~3 小时 GPU）能给标准差但不会改变定性结论。
+2. **per-session 26 维特征**：如果重新实现 Algorithm 2 让它在 session 级算特征（不是 pcap 级），就能完全消除"统计特征泄漏"的可能性，更公平地评估 ANDE 真实能力。这是一个独立的研究问题。
+3. **SOTA 对比基线**：FlowPic / MSerNetDroid 的预处理路线未串通；Hierarchical Classifier ([baselines/hierarchical.py](../src/ande/baselines/hierarchical.py)) 已实现但未在矩阵中。
+
+---
+
+## 附录 A：复现命令
 
 ```powershell
 # 0. 装依赖
 uv sync
 
-# 1. 数据：把 ISCXTor2016 的 Tor.zip + NonTor.tar.xz 解压到 data/raw/iscxtor2016/，
-#         darknet-datasets.zip 的 tor/ 子集解压到 data/raw/darknet2020/
+# 1. 数据：解压 ISCXTor2016 (Tor.zip + NonTor.tar.xz) 和 darknet-2020 (Tor 子集)
+#    到 data/raw/ 对应子目录
 
 # 2. 预处理（约 1 小时）
-uv run python -m ande.data.preprocess_raw --raw-root data/raw --out-root data --workers 8
+uv run python -m ande.data.preprocess_raw  --raw-root data/raw --out-root data --workers 8
 uv run python -m ande.data.preprocess_stats --raw-root data/raw --out-root data --workers 4
 
-# 3. 单跑 ANDE 8100/14 类（约 5 分钟，5090；35 分钟，4060）
-uv run python -m ande.train --config configs/ande_8100_14cls.yaml
-
-# 4. 跑完整 42 组矩阵（约 65 分钟，5090）
+# 3. 跑完整 42 组矩阵（pcap-level split，~65 分钟，5090）
 uv run python scripts/run_matrix_autodl.py
 uv run python scripts/build_tables.py --out-dir outputs --target docs/results
 
-# 5. 重新生成本报告所有图
+# 4. 重新生成本报告所有图
 uv run python scripts/generate_report_figures.py
 ```
 
 ---
 
-*报告生成于 2026-05-06，基于 [outputs/ande_8100_14cls/results.json](../outputs/ande_8100_14cls/results.json)（单跑）+ [docs/results/results_long.csv](results/results_long.csv)（42 组矩阵）。完整矩阵在 [AutoDL RTX 5090](../scripts/run_matrix_autodl.py) 上 64.9 分钟跑完。*
+## 附录 B：单跑 ANDE 8100/14 类
+
+```powershell
+# 默认 split_at='pcap'，结果 ~0.65-0.70
+uv run python -m ande.train --config configs/ande_8100_14cls.yaml
+
+# 复现"泄漏版"的 0.99，需手动改 configs/ande_8100_14cls.yaml 加 split_at: session
+```
+
+---
+
+*报告生成于 2026-05-06，基于 [outputs/ande_8100_behavior14_seed42/results.json](../outputs/ande_8100_behavior14_seed42/results.json)（单跑）+ [docs/results/results_long.csv](results/results_long.csv)（42 组矩阵）。*

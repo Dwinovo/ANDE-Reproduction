@@ -23,7 +23,13 @@ from sklearn.metrics import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RESULTS = REPO_ROOT / "outputs" / "ande_8100_14cls" / "results.json"
+# Use the 8100 / 14-class ANDE run from the matrix as the canonical "main" run.
+# Falls back to the older single-run path if the matrix output is absent.
+_CANDIDATES = [
+    REPO_ROOT / "outputs" / "ande_8100_behavior14_seed42" / "results.json",
+    REPO_ROOT / "outputs" / "ande_8100_14cls" / "results.json",
+]
+RESULTS = next((p for p in _CANDIDATES if p.exists()), _CANDIDATES[0])
 MANIFEST = REPO_ROOT / "data" / "manifest_raw.parquet"
 DATA_ROOT = REPO_ROOT / "data"
 OUT = REPO_ROOT / "docs" / "figures"
@@ -74,7 +80,11 @@ def fig_training_curves() -> Path:
     ax.grid(True, alpha=0.3)
     ax.legend(loc="lower right")
 
-    fig.suptitle(f"ANDE 8100B / 14-class on RTX 4060 (early-stopped at ep {len(hist)})", y=1.02)
+    fig.suptitle(
+        f"ANDE 8100B / 14-class on RTX 5090, pcap-level split "
+        f"(early-stopped at ep {len(hist)})",
+        y=1.02,
+    )
     fig.tight_layout()
     out = OUT / "training_curves.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
@@ -202,8 +212,12 @@ def fig_matrix_overview() -> Path:
     sizes = [784, 4096, 8100]
 
     fig, axes = plt.subplots(2, 1, figsize=(14, 9), sharex=True)
-    for ax, task, paper_line in zip(
-        axes, ["behavior14", "binary2"], [0.9820, None], strict=True
+    for ax, task, paper_line, ylim in zip(
+        axes,
+        ["behavior14", "binary2"],
+        [0.9820, None],
+        [(0.5, 1.02), (0.99, 1.005)],
+        strict=True,
     ):
         sub = df[df["task"] == task]
         # average across seeds
@@ -217,25 +231,30 @@ def fig_matrix_overview() -> Path:
                 sz_acc.append(row["accuracy"].iloc[0] if not row.empty else np.nan)
             offset = (i - 1) * width
             colors = [method_color[m] for m in method_order]
-            bars = ax.bar(x + offset, sz_acc, width, label=f"size={sz}",
-                          color=colors, alpha=0.55 + 0.225 * i,
-                          edgecolor="black", linewidth=0.4)
+            ax.bar(
+                x + offset, sz_acc, width, label=f"size={sz}",
+                color=colors, alpha=0.55 + 0.225 * i,
+                edgecolor="black", linewidth=0.4,
+            )
             for j, v in enumerate(sz_acc):
                 if not np.isnan(v):
-                    ax.text(x[j] + offset, v + 0.001, f"{v:.3f}",
+                    ax.text(x[j] + offset, v + 0.005, f"{v:.3f}",
                             ha="center", fontsize=6.5, rotation=90)
         if paper_line is not None:
             ax.axhline(paper_line, color="red", linewidth=1, linestyle=":",
                        label=f"paper Acc {paper_line}")
-        ax.set_ylim(0.93, 1.005)
+        ax.set_ylim(*ylim)
         ax.set_ylabel("accuracy")
         ax.set_title(f"task = {task}")
         ax.grid(True, axis="y", alpha=0.3)
         ax.set_xticks(x)
         ax.set_xticklabels(method_order, rotation=0)
         ax.legend(loc="lower left", ncol=4, fontsize=8)
-    fig.suptitle("42-experiment matrix: accuracy by method x size x task (RTX 5090)",
-                 y=1.005)
+    fig.suptitle(
+        "42-experiment matrix: accuracy by method x size x task "
+        "(pcap-level split, RTX 5090)",
+        y=1.005,
+    )
     fig.tight_layout()
     out = OUT / "matrix_overview.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
