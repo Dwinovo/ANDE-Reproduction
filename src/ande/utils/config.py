@@ -14,7 +14,7 @@ class DataCfg:
     size: int = 8100  # 784 / 4096 / 8100
     task: str = "behavior14"  # binary2 / behavior14
     split_ratio: float = 0.8
-    split_at: str = "pcap"  # pcap (no leakage) / session (legacy, leaks per-pcap stats)
+    split_at: str = "session"  # session (default; safe with per-session stats) / pcap (stricter inter-pcap eval)
     batch_size: int = 64
     num_workers: int = 4
     manifest_raw: str = "data/manifest_raw.parquet"

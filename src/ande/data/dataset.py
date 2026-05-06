@@ -48,12 +48,37 @@ def load_joined_manifest(
     size: int,
     task: str,
 ) -> tuple[pd.DataFrame, str, int]:
+    """Inner-join the per-session image manifest with the per-session stats manifest.
+
+    Both manifests are now session-level (one row per session, identified by
+    ``session_id``). Sessions present in only one manifest (e.g. those with
+    fewer than the stats threshold of 10 packets) are dropped.
+    """
     raw_df = pd.read_parquet(manifest_raw)
     stat_df = pd.read_parquet(manifest_stats)
     if f"image_{size}" not in raw_df.columns:
         raise KeyError(f"manifest_raw lacks image_{size} column")
     label_col, num_classes = _label_col(task)
-    joined = raw_df.merge(stat_df, on="pcap_src", how="inner", suffixes=("", "_stat"))
+
+    # Backwards compat: very early stats manifests joined on pcap_src (per-pcap
+    # features). If the stats manifest has no ``session_id`` column, fall back
+    # to that legacy behaviour with a loud warning.
+    if "session_id" in stat_df.columns:
+        join_key = "session_id"
+        # drop pcap_src from stats to avoid a redundant column after merge
+        stat_df = stat_df.drop(columns=["pcap_src"], errors="ignore")
+    else:
+        import warnings
+        warnings.warn(
+            "manifest_stats has no session_id column - falling back to per-pcap "
+            "join. This re-introduces the pcap-level data leak; re-run "
+            "preprocess_stats to fix.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        join_key = "pcap_src"
+
+    joined = raw_df.merge(stat_df, on=join_key, how="inner", suffixes=("", "_stat"))
     keep = ["session_id", "pcap_src", label_col, f"image_{size}", *FEATURE_ORDER]
     joined = joined[keep].dropna()
     return joined, label_col, num_classes
@@ -94,19 +119,19 @@ def stratified_split(
     label_col: str,
     train_ratio: float,
     seed: int,
-    split_at: str = "pcap",
+    split_at: str = "session",
 ) -> SplitManifest:
     """Stratified train/test split.
 
-    ``split_at='session'`` is the naive choice but causes pcap-level
-    leakage: the 26-d statistical features are computed per pcap, so when
-    sessions from the same pcap end up in both train and test the features
-    are duplicated and tree models can perfectly memorise pcap -> label.
+    Default is ``split_at='session'`` (one stratified split over all
+    sessions). Now that statistical features are computed per session
+    (Algorithm 2's ``*.pcap`` actually refers to per-session pcap files
+    emitted by Algorithm 1), session-level split no longer leaks.
 
-    ``split_at='pcap'`` (default) splits at the pcap level first, then
-    expands to all sessions of the chosen pcaps. The 26-d stats vector for
-    a given pcap therefore appears either entirely in train or entirely in
-    test, never both.
+    ``split_at='pcap'`` is also supported as a stricter evaluation: the
+    train/test partition is made at the pcap level so no test session
+    shares a source pcap with any train session. Useful for testing
+    inter-pcap generalisation.
     """
     if split_at not in VALID_SPLIT_GRANULARITY:
         raise ValueError(f"split_at must be one of {VALID_SPLIT_GRANULARITY}, got {split_at!r}")

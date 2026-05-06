@@ -1,6 +1,17 @@
-"""Algorithm 2 (paper Section III-B-2): pcap -> 26 statistical features.
+"""Algorithm 2 (paper Section III-B-2): per-SESSION 26-d statistical features.
 
-Per session we compute:
+Important reading of the paper:
+    Algorithm 2's pseudocode says ``for *.pcap in folder do; computefeatures(*.pcap)``,
+    but Table II describes every feature as "within a packet window" and the last
+    feature is explicitly "Number of packets in *one session*". Combined with the
+    fact that the paper reports 50,905 *samples* (sessions, not pcaps), the
+    correct interpretation is that ``*.pcap`` in Algorithm 2 refers to the
+    *per-session* pcap files emitted by Algorithm 1 line 5 ("save session to
+    folders"), not to the raw capture files. We therefore compute one 26-d
+    vector **per session** here, with session boundaries identical to those
+    used by ``preprocess_raw.py``.
+
+For each session we compute:
   TCP flag means (SYN, URG, FIN, ACK, PSH, RST)        ->  6
   Protocol counts (DNS, TCP, UDP, ICMP)                ->  4
   Window duration                                       ->  1
@@ -13,10 +24,11 @@ Per session we compute:
                                                        ----
                                                          26
 
-Constraints from the paper:
-  * skip captures with <= 10 packets
-  * cap at 500_000 packets per capture
-  * z-score normalise across the dataset before feeding the MLP
+Threshold: keep sessions with >= MIN_PACKETS=10 packets (Algorithm 2 line 13).
+Algorithm 1 already drops sessions with < 3 packets; sessions with 3-9 packets
+exist in the image manifest but not the stats manifest. The Dataset's
+``load_joined_manifest`` joins on ``session_id`` so those few sessions are
+dropped from the joined training set.
 """
 
 from __future__ import annotations
@@ -35,10 +47,12 @@ from scapy.layers.dns import DNS  # type: ignore[import-untyped]
 from scapy.layers.inet import ICMP, IP, TCP, UDP  # type: ignore[import-untyped]
 from tqdm import tqdm
 
+from ande.data.labels import label_from_path
+from ande.data.preprocess_raw import _session_key
+
 LOG = logging.getLogger(__name__)
 
 MIN_PACKETS = 10
-MAX_PACKETS = 500_000
 SMALL_PAYLOAD_THRESHOLD = 32
 
 FEATURE_ORDER: tuple[str, ...] = (
@@ -87,7 +101,12 @@ def _payload_size(pkt) -> int:
     return 0
 
 
-def compute_features(pcap: Path) -> dict | None:
+def compute_features(packets: list) -> dict | None:
+    """Compute 26-d features over the list of scapy packets belonging to ONE session."""
+    n = len(packets)
+    if n <= MIN_PACKETS:
+        return None
+
     flags = {k: 0 for k in ("S", "U", "F", "A", "P", "R")}
     n_dns = n_tcp = n_udp = n_icmp = 0
     n_small = 0
@@ -95,48 +114,34 @@ def compute_features(pcap: Path) -> dict | None:
     payload_lens: list[int] = []
     timestamps: list[float] = []
 
-    n = 0
-    try:
-        with PcapReader(str(pcap)) as reader:
-            for pkt in reader:
-                if n >= MAX_PACKETS:
-                    break
-                n += 1
-                pkt_lens.append(len(pkt))
-                timestamps.append(float(pkt.time))
-                if TCP in pkt:
-                    n_tcp += 1
-                    f = int(pkt[TCP].flags)
-                    if f & 0x02:
-                        flags["S"] += 1
-                    if f & 0x20:
-                        flags["U"] += 1
-                    if f & 0x01:
-                        flags["F"] += 1
-                    if f & 0x10:
-                        flags["A"] += 1
-                    if f & 0x08:
-                        flags["P"] += 1
-                    if f & 0x04:
-                        flags["R"] += 1
-                if UDP in pkt:
-                    n_udp += 1
-                if ICMP in pkt:
-                    n_icmp += 1
-                if DNS in pkt:
-                    n_dns += 1
-                pl = _payload_size(pkt)
-                payload_lens.append(pl)
-                if pl < SMALL_PAYLOAD_THRESHOLD:
-                    n_small += 1
-                if IP not in pkt:
-                    continue
-    except Exception as exc:
-        LOG.warning("scapy failed on %s: %s", pcap, exc)
-        return None
-
-    if n <= MIN_PACKETS:
-        return None
+    for pkt in packets:
+        pkt_lens.append(len(pkt))
+        timestamps.append(float(pkt.time))
+        if TCP in pkt:
+            n_tcp += 1
+            f = int(pkt[TCP].flags)
+            if f & 0x02:
+                flags["S"] += 1
+            if f & 0x20:
+                flags["U"] += 1
+            if f & 0x01:
+                flags["F"] += 1
+            if f & 0x10:
+                flags["A"] += 1
+            if f & 0x08:
+                flags["P"] += 1
+            if f & 0x04:
+                flags["R"] += 1
+        if UDP in pkt:
+            n_udp += 1
+        if ICMP in pkt:
+            n_icmp += 1
+        if DNS in pkt:
+            n_dns += 1
+        pl = _payload_size(pkt)
+        payload_lens.append(pl)
+        if pl < SMALL_PAYLOAD_THRESHOLD:
+            n_small += 1
 
     deltas = [timestamps[i] - timestamps[i - 1] for i in range(1, n)] if n > 1 else []
     duration = (timestamps[-1] - timestamps[0]) if n > 1 else 0.0
@@ -173,25 +178,44 @@ def compute_features(pcap: Path) -> dict | None:
     return feats
 
 
-def _worker(pcap: Path) -> tuple[Path, dict] | None:
-    feats = compute_features(pcap)
-    return (pcap, feats) if feats is not None else None
+def _process_pcap(pcap: Path) -> list[dict]:
+    """Walk one raw pcap, split into sessions, compute 26-d features per session.
 
-
-def iter_pcap_features(raw_root: Path, workers: int = 1) -> list[tuple[Path, dict]]:
-    pcaps = sorted(p for p in raw_root.rglob("*") if p.suffix.lower() in {".pcap", ".pcapng"})
-    results: list[tuple[Path, dict]] = []
-    if workers > 1:
-        with mp.Pool(workers) as pool:
-            for r in tqdm(pool.imap_unordered(_worker, pcaps), total=len(pcaps)):
-                if r is not None:
-                    results.append(r)
-    else:
-        for pcap in tqdm(pcaps):
-            r = _worker(pcap)
-            if r is not None:
-                results.append(r)
-    return results
+    Per-packet exception handling (matching preprocess_raw) so that one
+    malformed packet does not discard the whole pcap.
+    """
+    label = label_from_path(pcap)
+    if label is None:
+        return []
+    sessions: dict[tuple, list] = {}
+    try:
+        reader = PcapReader(str(pcap))
+    except Exception as exc:
+        LOG.warning("could not open %s: %s", pcap, exc)
+        return []
+    try:
+        for i, pkt in enumerate(reader):
+            try:
+                key = _session_key(pkt)
+                if key is None:
+                    continue
+                sessions.setdefault(key, []).append(pkt)
+            except Exception as exc:  # pragma: no cover - rare malformed packets
+                LOG.debug("skip pkt %d in %s: %s", i, pcap.name, exc)
+    finally:
+        reader.close()
+    rows: list[dict] = []
+    for key, packets in sessions.items():
+        feats = compute_features(packets)
+        if feats is None:
+            continue
+        sid = f"{pcap.stem}__{key[0]}_{key[2]}_{key[1]}_{key[3]}_{key[4]}"
+        rows.append({
+            "session_id": sid,
+            "pcap_src": str(pcap),
+            **feats,
+        })
+    return rows
 
 
 def to_array(rows: list[dict]) -> np.ndarray:
@@ -201,7 +225,7 @@ def to_array(rows: list[dict]) -> np.ndarray:
 def zscore_fit(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     mu = arr.mean(axis=0)
     sigma = arr.std(axis=0)
-    sigma = np.where(sigma == 0, 1.0, sigma)  # guard against constant columns
+    sigma = np.where(sigma == 0, 1.0, sigma)
     return mu, sigma
 
 
@@ -210,34 +234,39 @@ def zscore_apply(arr: np.ndarray, mu: np.ndarray, sigma: np.ndarray) -> np.ndarr
 
 
 def preprocess(raw_root: Path, out_root: Path, workers: int = 1) -> Path:
+    pcaps = sorted(p for p in raw_root.rglob("*") if p.suffix.lower() in {".pcap", ".pcapng"})
+    if not pcaps:
+        raise FileNotFoundError(f"no pcap/pcapng under {raw_root}")
+
     rows: list[dict] = []
-    sources: list[str] = []
-    for pcap, feats in iter_pcap_features(raw_root, workers=workers):
-        rows.append(feats)
-        sources.append(str(pcap))
+    if workers > 1:
+        with mp.Pool(workers) as pool:
+            for chunk in tqdm(pool.imap_unordered(_process_pcap, pcaps), total=len(pcaps)):
+                rows.extend(chunk)
+    else:
+        for pcap in tqdm(pcaps):
+            rows.extend(_process_pcap(pcap))
+
     if not rows:
-        raise RuntimeError(f"no usable pcaps under {raw_root}")
-    arr = to_array(rows)
+        raise RuntimeError(f"no usable sessions under {raw_root}")
+
+    feat_only = [{k: r[k] for k in FEATURE_ORDER} for r in rows]
+    arr = to_array(feat_only)
     mu, sigma = zscore_fit(arr)
     arr_norm = zscore_apply(arr, mu, sigma)
 
     out_root.mkdir(parents=True, exist_ok=True)
     (out_root / "stats").mkdir(exist_ok=True)
-    raw_json = out_root / "stats" / "stats_raw.json"
-    norm_json = out_root / "stats" / "stats_norm.json"
-    moments = out_root / "stats" / "stats_moments.json"
-
-    raw_json.write_text(json.dumps([dict(zip(FEATURE_ORDER, row, strict=True)) for row in arr]))
-    norm_json.write_text(
-        json.dumps([dict(zip(FEATURE_ORDER, row, strict=True)) for row in arr_norm])
+    (out_root / "stats" / "stats_moments.json").write_text(
+        json.dumps({"mu": mu.tolist(), "sigma": sigma.tolist()})
     )
-    moments.write_text(json.dumps({"mu": mu.tolist(), "sigma": sigma.tolist()}))
 
     df = pd.DataFrame(arr_norm, columns=list(FEATURE_ORDER))
-    df.insert(0, "pcap_src", sources)
+    df.insert(0, "session_id", [r["session_id"] for r in rows])
+    df.insert(1, "pcap_src", [r["pcap_src"] for r in rows])
     manifest = out_root / "manifest_stats.parquet"
     df.to_parquet(manifest, index=False)
-    LOG.info("wrote %d feature vectors -> %s", len(df), manifest)
+    LOG.info("wrote %d session-level feature vectors -> %s", len(df), manifest)
     return manifest
 
 
