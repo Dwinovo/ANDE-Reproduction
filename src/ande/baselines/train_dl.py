@@ -90,7 +90,7 @@ def run(config_path: str, model_name: str) -> dict:
     df, label_col, num_classes = load_joined_manifest(
         cfg.data.manifest_raw, cfg.data.manifest_stats, cfg.data.size, cfg.data.task
     )
-    split = stratified_split(df, label_col, cfg.data.split_ratio, cfg.seed)
+    split = stratified_split(df, label_col, cfg.data.split_ratio, cfg.seed, cfg.data.split_at)
     data_root = Path(cfg.data.manifest_raw).parent
     train_ds = ANDEDataset(split.train, data_root, cfg.data.size, label_col)
     test_ds = ANDEDataset(split.test, data_root, cfg.data.size, label_col)

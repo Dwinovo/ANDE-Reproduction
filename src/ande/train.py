@@ -103,7 +103,7 @@ def run(config_path: str) -> dict:
     df, label_col, num_classes = load_joined_manifest(
         cfg.data.manifest_raw, cfg.data.manifest_stats, cfg.data.size, cfg.data.task
     )
-    split = stratified_split(df, label_col, cfg.data.split_ratio, cfg.seed)
+    split = stratified_split(df, label_col, cfg.data.split_ratio, cfg.seed, cfg.data.split_at)
     LOG.info("split: train=%d test=%d classes=%d", len(split.train), len(split.test), num_classes)
 
     data_root = Path(cfg.data.manifest_raw).parent

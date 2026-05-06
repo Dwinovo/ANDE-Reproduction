@@ -59,20 +59,83 @@ def load_joined_manifest(
     return joined, label_col, num_classes
 
 
+VALID_SPLIT_GRANULARITY = ("session", "pcap")
+
+
+def _stratified_pcap_split(
+    pcap_label: pd.DataFrame, label_col: str, train_ratio: float, seed: int
+) -> tuple[set[str], set[str]]:
+    """Per-class stratified pcap split that guarantees at least 1 pcap in
+    each of train and test for every class that has >= 2 pcaps.
+
+    sklearn's ``train_test_split(stratify=...)`` is unreliable for classes
+    with only 2-3 samples (it can put both pcaps in train when the math
+    rounds that way). We do it manually instead.
+    """
+    rng = np.random.default_rng(seed)
+    train: list[str] = []
+    test: list[str] = []
+    for cls in sorted(pcap_label[label_col].unique()):
+        pcaps = pcap_label.loc[pcap_label[label_col] == cls, "pcap_src"].tolist()
+        n = len(pcaps)
+        if n < 2:
+            # Singleton class — cannot be split. Drop from both halves.
+            continue
+        rng.shuffle(pcaps)
+        n_test = max(1, int(round(n * (1.0 - train_ratio))))
+        n_test = min(n - 1, n_test)  # leave at least 1 for train
+        test.extend(pcaps[:n_test])
+        train.extend(pcaps[n_test:])
+    return set(train), set(test)
+
+
 def stratified_split(
-    df: pd.DataFrame, label_col: str, train_ratio: float, seed: int
+    df: pd.DataFrame,
+    label_col: str,
+    train_ratio: float,
+    seed: int,
+    split_at: str = "pcap",
 ) -> SplitManifest:
-    train_df, test_df = train_test_split(
-        df,
-        train_size=train_ratio,
-        stratify=df[label_col],
-        random_state=seed,
-    )
+    """Stratified train/test split.
+
+    ``split_at='session'`` is the naive choice but causes pcap-level
+    leakage: the 26-d statistical features are computed per pcap, so when
+    sessions from the same pcap end up in both train and test the features
+    are duplicated and tree models can perfectly memorise pcap -> label.
+
+    ``split_at='pcap'`` (default) splits at the pcap level first, then
+    expands to all sessions of the chosen pcaps. The 26-d stats vector for
+    a given pcap therefore appears either entirely in train or entirely in
+    test, never both.
+    """
+    if split_at not in VALID_SPLIT_GRANULARITY:
+        raise ValueError(f"split_at must be one of {VALID_SPLIT_GRANULARITY}, got {split_at!r}")
+
+    num_classes = int(df[label_col].max()) + 1
+
+    if split_at == "session":
+        train_df, test_df = train_test_split(
+            df,
+            train_size=train_ratio,
+            stratify=df[label_col],
+            random_state=seed,
+        )
+    else:  # pcap-level split
+        if "pcap_src" not in df.columns:
+            raise KeyError("pcap_src column required for pcap-level split")
+        # One label per pcap (verified by Algorithm 2's per-pcap output).
+        pcap_label = df.groupby("pcap_src", as_index=False)[label_col].first()
+        train_pcaps, test_pcaps = _stratified_pcap_split(
+            pcap_label, label_col, train_ratio, seed
+        )
+        train_df = df[df["pcap_src"].isin(train_pcaps)]
+        test_df = df[df["pcap_src"].isin(test_pcaps)]
+
     return SplitManifest(
         train=train_df.reset_index(drop=True),
         test=test_df.reset_index(drop=True),
         label_col=label_col,
-        num_classes=int(df[label_col].max()) + 1,
+        num_classes=num_classes,
     )
 
 

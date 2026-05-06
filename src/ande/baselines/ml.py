@@ -58,7 +58,7 @@ def run(config_path: str, model_name: str) -> dict:
     df, label_col, num_classes = load_joined_manifest(
         cfg.data.manifest_raw, cfg.data.manifest_stats, cfg.data.size, cfg.data.task
     )
-    split = stratified_split(df, label_col, cfg.data.split_ratio, cfg.seed)
+    split = stratified_split(df, label_col, cfg.data.split_ratio, cfg.seed, cfg.data.split_at)
     x_tr, y_tr = _xy(split.train, label_col)
     x_te, y_te = _xy(split.test, label_col)
 

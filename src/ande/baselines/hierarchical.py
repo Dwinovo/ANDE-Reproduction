@@ -83,7 +83,7 @@ def run(config_path: str) -> dict:
     # ensure both labels are present in the joined manifest
     if "label_14cls" not in df.columns:
         raise KeyError("manifest_raw must expose label_14cls for the hierarchical baseline")
-    split = stratified_split(df, label_col, cfg.data.split_ratio, cfg.seed)
+    split = stratified_split(df, label_col, cfg.data.split_ratio, cfg.seed, cfg.data.split_at)
     x_tr, _ = _xy(split.train, label_col)
     x_te, y_te = _xy(split.test, label_col)
     model = fit_hierarchy(split.train, cfg.seed)
