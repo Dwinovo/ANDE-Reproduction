@@ -81,7 +81,7 @@ def fig_training_curves() -> Path:
     ax.legend(loc="lower right")
 
     fig.suptitle(
-        f"ANDE 8100B / 14-class on RTX 5090, pcap-level split "
+        f"ANDE 8100B / 14-class on RTX 5090, per-session stats "
         f"(early-stopped at ep {len(hist)})",
         y=1.02,
     )
@@ -252,7 +252,7 @@ def fig_matrix_overview() -> Path:
         ax.legend(loc="lower left", ncol=4, fontsize=8)
     fig.suptitle(
         "42-experiment matrix: accuracy by method x size x task "
-        "(pcap-level split, RTX 5090)",
+        "(per-session stats, session-level split, RTX 5090)",
         y=1.005,
     )
     fig.tight_layout()
