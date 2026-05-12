@@ -54,3 +54,6 @@ outputs/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Classroom presentation Word docs (generated locally, kept out of repo)
+*.docx

@@ -152,14 +152,6 @@ def fig_per_class_metrics() -> Path:
         y_true, y_pred, labels=list(range(len(CLASS_NAMES))), zero_division=0
     )
 
-    df = pd.DataFrame({
-        "class": CLASS_NAMES,
-        "precision": p,
-        "recall": r,
-        "f1": f1,
-        "support": support,
-    })
-
     fig, axes = plt.subplots(2, 1, figsize=(13, 8), sharex=True,
                              gridspec_kw={"height_ratios": [3, 1]})
 
@@ -266,7 +258,6 @@ def fig_sample_images() -> Path:
     """One 90x90 raw-byte image per 14-class label."""
     df = pd.read_parquet(MANIFEST)
     fig, axes = plt.subplots(2, 7, figsize=(15, 5))
-    rng = np.random.default_rng(0)
     for label_id in range(14):
         sub = df[df["label_14cls"] == label_id]
         if sub.empty:
@@ -302,7 +293,7 @@ def fig_sample_images() -> Path:
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
-    for name, fn in [
+    for _name, fn in [
         ("training_curves", fig_training_curves),
         ("confusion_matrix", fig_confusion_matrix),
         ("per_class_metrics", fig_per_class_metrics),

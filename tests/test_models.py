@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from ande.models import ANDE, SEResNet18, count_parameters
+from ande.models import ANDE, ByteSegmentAttention, ByteTCN, SEResNet18, count_parameters
 
 
 @pytest.mark.parametrize("size,hw", [(784, 28), (4096, 64), (8100, 90)])
@@ -41,3 +41,25 @@ def test_use_se_flag_changes_param_count() -> None:
     n_with = count_parameters(ANDE(num_classes=14, use_se=True))
     n_without = count_parameters(ANDE(num_classes=14, use_se=False))
     assert n_with > n_without
+
+
+@pytest.mark.parametrize("use_stats", [False, True])
+def test_byte_tcn_forward(use_stats: bool) -> None:
+    model = ByteTCN(num_classes=14, use_stats=use_stats).eval()
+    img = torch.randn(2, 1, 90, 90)
+    stat = torch.randn(2, 26)
+    with torch.no_grad():
+        out = model(img, stat)
+    assert out.shape == (2, 14)
+
+
+@pytest.mark.parametrize("use_stats", [False, True])
+def test_byte_segment_attention_forward(use_stats: bool) -> None:
+    model = ByteSegmentAttention(num_classes=14, max_length=8100, use_stats=use_stats).eval()
+    img = torch.randn(2, 1, 90, 90)
+    stat = torch.randn(2, 26)
+    with torch.no_grad():
+        out = model(img, stat)
+    assert out.shape == (2, 14)
+    assert model.last_attention is not None
+    assert model.last_attention.shape == (2, 64)
